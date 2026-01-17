@@ -1,0 +1,30 @@
+# Binaries
+bin/
+*.exe
+
+# Models (downloaded separately)
+models/*
+!models/.gitkeep
+
+# Test audio files
+.test/
+.audio.test/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# AI assistants
+.crush/
+.cursor/
+.aider/
+.continue/
+.codeium/
+.tabnine/
+.copilot/
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db

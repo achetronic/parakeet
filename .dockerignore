@@ -1,0 +1,27 @@
+# Binaries
+parakeet-server
+parakeet-server-*
+*.exe
+
+# Models (mounted at runtime)
+models/
+
+# Test files
+test/
+*.wav
+
+# Git
+.git
+.gitignore
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Documentation
+*.md
+LICENSE
+
+# CI/CD
+.github/
