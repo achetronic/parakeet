@@ -17,7 +17,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.25'
           cache: true
 
       - name: Run go vet
@@ -66,5 +66,5 @@ jobs:
 
       - name: Verify binary
         run: |
-          ls -la parakeet
-          file parakeet
+          ls -la ./bin/parakeet
+          file ./bin/parakeet
