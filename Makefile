@@ -24,7 +24,7 @@ DOCKER_TAG ?= $(VERSION)
 MODELS_DIR := ./models
 
 .PHONY: all build clean test fmt vet lint run help
-.PHONY: docker-build docker-run docker-push
+.PHONY: docker-build-int8 docker-build-fp32 docker-run-int8 docker-run-fp32 docker-push
 .PHONY: models models-int8 models-fp32
 .PHONY: release release-linux release-darwin release-windows
 .PHONY: deps-onnxruntime
@@ -49,8 +49,7 @@ $(BIN_DIR):
 build: $(BIN_DIR) ## Build the binary
 	$(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME) .
 
-build-static: $(BIN_DIR) ## Build a statically linked binary
-	CGO_ENABLED=0 $(GOBUILD) $(LDFLAGS) -a -installsuffix cgo -o $(BINARY_NAME) .
+# NOTE: Static build (CGO_ENABLED=0) is not possible because onnxruntime_go requires CGO
 
 ## Development targets
 
@@ -66,7 +65,7 @@ run-dev: build ## Run with custom port for development
 		echo "Error: ONNX Runtime library not found. Run 'make deps-onnxruntime' to install it."; \
 		exit 1; \
 	fi
-	ONNXRUNTIME_LIB=$(ONNXRUNTIME_LIB) ./$(BINARY_NAME) -port 5092 -models $(MODELS_DIR)
+	ONNXRUNTIME_LIB=$(ONNXRUNTIME_LIB) ./$(BINARY_NAME) -port 5092 -models $(MODELS_DIR) -debug=true
 
 clean: ## Remove build artifacts
 	rm -rf $(BIN_DIR)
@@ -142,16 +141,25 @@ models-fp32: ## Download fp32 full precision models (~2.5GB)
 
 ## Docker targets
 
-docker-build: ## Build Docker image
-	docker build -t $(DOCKER_IMAGE):$(DOCKER_TAG) .
-	docker tag $(DOCKER_IMAGE):$(DOCKER_TAG) $(DOCKER_IMAGE):latest
+docker-build-int8: ## Build Docker image with embedded int8 models (~670MB)
+	docker build --build-arg MODEL_PRECISION=int8 -t $(DOCKER_IMAGE):$(DOCKER_TAG)-int8 .
+	docker tag $(DOCKER_IMAGE):$(DOCKER_TAG)-int8 $(DOCKER_IMAGE):latest-int8
 
-docker-run: ## Run Docker container
-	docker run --rm -p 5092:5092 -v $(PWD)/models:/models $(DOCKER_IMAGE):$(DOCKER_TAG)
+docker-build-fp32: ## Build Docker image with embedded fp32 models (~2.5GB)
+	docker build --build-arg MODEL_PRECISION=fp32 -t $(DOCKER_IMAGE):$(DOCKER_TAG)-fp32 .
+	docker tag $(DOCKER_IMAGE):$(DOCKER_TAG)-fp32 $(DOCKER_IMAGE):latest-fp32
 
-docker-push: ## Push Docker image to registry
-	docker push $(DOCKER_IMAGE):$(DOCKER_TAG)
-	docker push $(DOCKER_IMAGE):latest
+docker-run-int8: ## Run Docker container with embedded int8 models
+	docker run --rm -p 5092:5092 $(DOCKER_IMAGE):$(DOCKER_TAG)-int8
+
+docker-run-fp32: ## Run Docker container with embedded fp32 models
+	docker run --rm -p 5092:5092 $(DOCKER_IMAGE):$(DOCKER_TAG)-fp32
+
+docker-push: ## Push Docker images to registry
+	docker push $(DOCKER_IMAGE):$(DOCKER_TAG)-int8
+	docker push $(DOCKER_IMAGE):$(DOCKER_TAG)-fp32
+	docker push $(DOCKER_IMAGE):latest-int8
+	docker push $(DOCKER_IMAGE):latest-fp32
 
 ## Release targets
 

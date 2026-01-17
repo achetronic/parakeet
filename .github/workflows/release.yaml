@@ -53,13 +53,13 @@ jobs:
           COMMIT=$(git rev-parse --short HEAD)
           BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           go build -ldflags "-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT} -X main.BuildDate=${BUILD_DATE}" \
-            -o parakeet-server-${{ matrix.suffix }} .
+            -o parakeet-${{ matrix.suffix }} .
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: parakeet-server-${{ matrix.suffix }}
-          path: parakeet-server-${{ matrix.suffix }}
+          name: parakeet-${{ matrix.suffix }}
+          path: parakeet-${{ matrix.suffix }}
 
   release:
     name: Create Release
@@ -103,6 +103,11 @@ jobs:
     name: Build and Push Docker Image
     runs-on: ubuntu-latest
     needs: build
+    strategy:
+      matrix:
+        precision:
+          - int8
+          - fp32
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -126,10 +131,10 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=sha
+            type=semver,pattern={{version}},suffix=-${{ matrix.precision }}
+            type=semver,pattern={{major}}.{{minor}},suffix=-${{ matrix.precision }}
+            type=semver,pattern={{major}},suffix=-${{ matrix.precision }}
+            type=raw,value=latest-${{ matrix.precision }}
 
       - name: Build and push
         uses: docker/build-push-action@v5
@@ -139,5 +144,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          build-args: |
+            MODEL_PRECISION=${{ matrix.precision }}
+          cache-from: type=gha,scope=${{ matrix.precision }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.precision }}

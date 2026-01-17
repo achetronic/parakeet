@@ -1,6 +1,6 @@
 # Binaries
-parakeet-server
-parakeet-server-*
+parakeet
+parakeet-*
 *.exe
 
 # Models (mounted at runtime)
