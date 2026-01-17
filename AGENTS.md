@@ -7,8 +7,8 @@ This document helps AI agents work effectively in this codebase.
 **Parakeet ASR Server** - A Go-based automatic speech recognition (ASR) server using NVIDIA's Parakeet TDT 0.6B model in ONNX format. Provides an OpenAI Whisper-compatible API for audio transcription.
 
 ### Key Technologies
-- **Language**: Go 1.21+
-- **ML Runtime**: ONNX Runtime (CPU inference)
+- **Language**: Go 1.25+
+- **ML Runtime**: ONNX Runtime 1.21.x (CPU inference)
 - **Model**: NVIDIA Parakeet TDT 0.6B (Conformer-based encoder with Token-and-Duration Transducer decoder)
 - **API**: REST, OpenAI Whisper-compatible
 
@@ -16,16 +16,18 @@ This document helps AI agents work effectively in this codebase.
 
 ```bash
 # Build
-make build
+make build                  # Build to ./bin/parakeet
 
 # Run
-make run                    # Build and run
-./parakeet-server           # Run binary directly
-./parakeet-server -port 8080 -models /path/to/models
+make run                    # Build and run with debug mode
+make run-dev                # Run with custom port (5092) for development
+./bin/parakeet              # Run binary directly
+./bin/parakeet -port 8080 -models /path/to/models -debug=true
 
 # Download models
-make models                 # Download int8 models (default)
-make models-fp32            # Download full precision models
+make models                 # Download int8 models (default, ~670MB)
+make models-int8            # Download int8 quantized models
+make models-fp32            # Download full precision models (~2.5GB)
 
 # Test
 make test                   # Run tests
@@ -34,29 +36,44 @@ make test-coverage          # Run with coverage
 # Code quality
 make fmt                    # Format code
 make vet                    # Run go vet
-make lint                   # Run all linters
+make lint                   # Run all linters (vet + fmt)
+
+# Dependencies
+make deps                   # Download Go dependencies
+make deps-tidy              # Tidy dependencies
+make deps-onnxruntime       # Install ONNX Runtime library
 
 # Docker
-make docker-build           # Build image
-make docker-run             # Run container
+make docker-build-int8      # Build image with int8 models
+make docker-build-fp32      # Build image with fp32 models
+make docker-run-int8        # Run container with int8 models
+make docker-run-fp32        # Run container with fp32 models
 
 # Release
 make release                # Build all platforms
+make release-linux          # Build Linux binaries (amd64/arm64)
+make release-darwin         # Build macOS binaries (amd64/arm64)
+make release-windows        # Build Windows binary (amd64)
 ```
 
 ## Project Structure
 
 ```
 parakeet/
-├── main.go                 # HTTP server, API handlers, response formatting
+├── main.go                 # Entry point, CLI flags, server initialization
 ├── internal/
-│   └── asr/
-│       ├── transcriber.go  # ONNX inference pipeline, TDT decoding
-│       ├── mel.go          # Mel filterbank feature extraction (FFT, windowing)
-│       └── audio.go        # WAV parsing, resampling to 16kHz
+│   ├── asr/
+│   │   ├── transcriber.go  # ONNX inference pipeline, TDT decoding
+│   │   ├── mel.go          # Mel filterbank feature extraction (FFT, windowing)
+│   │   └── audio.go        # WAV parsing, resampling to 16kHz
+│   └── server/
+│       ├── server.go       # HTTP server, route setup, lifecycle management
+│       ├── handlers.go     # API endpoint handlers, response formatting
+│       └── types.go        # Request/response type definitions
 ├── models/                 # ONNX models (downloaded separately)
+├── bin/                    # Build output directory
 ├── Makefile                # Build recipes
-├── Dockerfile              # Container build
+├── Dockerfile              # Multi-stage container build
 ├── .github/
 │   └── workflows/
 │       ├── ci.yaml         # CI pipeline (lint, test, build)
@@ -66,29 +83,76 @@ parakeet/
 
 ## Code Organization
 
-### `main.go` (HTTP Server)
-- Handles OpenAI-compatible endpoints
-- Routes: `/v1/audio/transcriptions`, `/v1/audio/translations`, `/v1/models`, `/health`
-- Parses multipart form data (25MB max)
-- Supports response formats: `json`, `text`, `srt`, `vtt`, `verbose_json`
-- CORS enabled for all origins
+### `main.go` (Entry Point)
+- Parses CLI flags: `-port`, `-models`, `-debug`
+- Creates and runs the server
+- Default port: 5092, default models dir: `./models`
 
-### `internal/asr/transcriber.go` (Inference Pipeline)
-- `NewTranscriber()` - Initializes ONNX Runtime, loads vocab, creates mel filterbank
-- `Transcribe()` - Main entry point: audio -> mel features -> encoder -> TDT decoder -> text
-- `tdtDecode()` - Token-and-Duration Transducer greedy decoding loop
-- `tokensToText()` - Converts token IDs to text using vocab
+### `internal/server/` (HTTP Server Package)
 
-### `internal/asr/mel.go` (Feature Extraction)
-- Custom mel filterbank implementation (no external DSP library)
-- FFT using Cooley-Tukey algorithm
-- Hann windowing, log mel energies
-- Per-utterance mean/variance normalization
+#### `server.go`
+- `Config` struct: Port, ModelsDir, Debug settings
+- `Server` struct: wraps config, transcriber, and HTTP mux
+- `New()` - Initializes transcriber and routes
+- `Run()` - Starts HTTP listener
+- `Close()` - Releases resources
 
-### `internal/asr/audio.go` (Audio Processing)
-- WAV parser supporting 8/16/24/32-bit PCM
-- Stereo to mono conversion
-- Linear interpolation resampling to 16kHz
+#### `handlers.go`
+- `handleTranscription()` - Main endpoint, parses multipart form, returns transcription
+- `handleTranslation()` - Delegates to transcription (Parakeet is English-focused)
+- `handleModels()` - Returns available models (parakeet-tdt-0.6b, whisper-1 alias)
+- `handleHealth()` - Health check endpoint
+- Response format helpers: `formatSRTTime()`, `formatVTTTime()`
+- CORS and error response utilities
+
+#### `types.go`
+- `TranscriptionResponse` - Simple JSON response with text
+- `VerboseTranscriptionResponse` - Detailed response with segments, timing
+- `Segment` - Transcription segment with timing info
+- `ErrorResponse`, `ErrorDetail` - OpenAI-compatible error format
+- `ModelInfo`, `ModelsResponse` - Model listing types
+
+### `internal/asr/` (ASR Package)
+
+#### `transcriber.go`
+- `DebugMode` - Global flag for verbose logging
+- `Config` - Model configuration (features_size, subsampling_factor)
+- `Transcriber` - Main inference struct
+- `NewTranscriber()` - Loads config, vocab, initializes ONNX Runtime
+- `Transcribe()` - Main entry: audio -> mel -> encoder -> TDT decode -> text
+- `loadAudio()` - Format detection and parsing
+- `runInference()` - Encoder ONNX session execution
+- `tdtDecode()` - TDT greedy decoding loop with state management
+- `tokensToText()` - Token IDs to text with cleanup
+
+#### `mel.go`
+- `MelFilterbank` - Mel-scale filterbank feature extractor
+- `NewMelFilterbank()` - Creates filterbank with NeMo defaults (128 mels, 512 FFT)
+- `Extract()` - Computes mel features with Hann windowing
+- `normalize()` - Per-utterance mean/variance normalization
+- `fft()` - Radix-2 Cooley-Tukey FFT implementation
+- Mel/Hz conversion helpers
+
+#### `audio.go`
+- `parseWAV()` - WAV parser supporting multiple chunk layouts
+- `convertToFloat32()` - Supports 8/16/24/32-bit PCM and 32-bit float
+- `resample()` - Linear interpolation resampling to 16kHz
+
+## API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/v1/audio/transcriptions` | Transcribe audio (OpenAI-compatible) |
+| POST | `/v1/audio/translations` | Translate audio (delegates to transcription) |
+| GET | `/v1/models` | List available models |
+| GET | `/health` | Health check |
+
+### Transcription Parameters
+- `file` (required) - Audio file (multipart form, max 25MB)
+- `model` - Accepted but ignored (only one model)
+- `language` - ISO-639-1 code (default: "en")
+- `response_format` - json, text, srt, vtt, verbose_json (default: "json")
+- `prompt`, `temperature` - Accepted but ignored
 
 ## Code Patterns & Conventions
 
@@ -129,9 +193,9 @@ parakeet/
 
 ### Vocab Format
 ```
-_token 123
+▁token 123
 ```
-- SentencePiece format with `_` as word boundary marker
+- SentencePiece format with `▁` (U+2581) as word boundary marker
 - Special token: `<blk>` (blank) at index 8192
 
 ## Important Gotchas
@@ -139,18 +203,21 @@ _token 123
 ### ONNX Runtime Library
 - Must be installed separately (not vendored)
 - Set `ONNXRUNTIME_LIB` env var if not in standard paths
-- Auto-detection checks: `/usr/lib/`, `/usr/local/lib/`, `/opt/onnxruntime/lib/`
+- Auto-detection checks common paths in Makefile and transcriber.go
+- Use `make deps-onnxruntime` to install (requires sudo)
+- Compatible version: 1.21.x for onnxruntime_go v1.19.0
 
 ### Model Files Required
-- `encoder-model.int8.onnx` (652MB) or `encoder-model.onnx` (2.5GB)
-- `decoder_joint-model.int8.onnx` (18MB) or `decoder_joint-model.onnx` (72MB)
-- `config.json` and `vocab.txt`
+- `encoder-model.int8.onnx` (~652MB) or `encoder-model.onnx` (~2.5GB)
+- `decoder_joint-model.int8.onnx` (~18MB) or `decoder_joint-model.onnx` (~72MB)
+- `config.json`, `vocab.txt`, `nemo128.onnx`
 - Download via `make models` or manually from HuggingFace
 
 ### Audio Format Limitations
 - Currently **only WAV** format is supported
-- WebM, OGG, MP3, M4A return "requires ffmpeg - not yet implemented"
+- WebM, OGG, MP3, M4A return "requires ffmpeg conversion - not yet implemented"
 - All audio resampled to 16kHz mono internally
+- Minimum audio length: 100ms (1600 samples at 16kHz)
 
 ### Tensor Memory Management
 - Tensors must be destroyed manually (no GC)
@@ -161,7 +228,7 @@ _token 123
 - `model` parameter accepted but ignored (only one model)
 - `prompt` and `temperature` parameters accepted but ignored
 - `language` defaults to "en" if not specified
-- Translation endpoint (`/v1/audio/translations`) just calls transcription
+- Translation endpoint just calls transcription
 
 ## Environment Variables
 
@@ -173,22 +240,31 @@ _token 123
 
 From `go.mod`:
 ```
-github.com/yalue/onnxruntime_go v1.13.0
+go 1.25.5
+github.com/yalue/onnxruntime_go v1.19.0
 ```
 
-No other external Go dependencies. Standard library used for HTTP, JSON, audio processing.
+No other external Go dependencies. Standard library used for HTTP, JSON, audio processing, FFT.
 
 ## CI/CD
 
 ### CI Pipeline (`.github/workflows/ci.yaml`)
-- Runs on push/PR to main
-- Jobs: lint (vet, fmt), test, build
+- Runs on push/PR to main/master
+- Jobs: lint (Go 1.22), test (Go 1.25), build (Go 1.25)
+- Lint checks: go vet, gofmt
 
 ### Release Pipeline (`.github/workflows/release.yaml`)
 - Triggers on version tags (v*)
 - Builds binaries for linux/darwin/windows (amd64/arm64)
 - Creates GitHub release with checksums
-- Pushes Docker image to ghcr.io
+- Pushes Docker images to ghcr.io (int8 and fp32 variants)
+
+### Docker Build
+- Multi-stage build with golang:1.25-bookworm builder
+- Runtime: debian:bookworm-slim with ONNX Runtime 1.21.0
+- Models embedded in image during build
+- Health check included
+- Exposed port: 5092
 
 ## Common Tasks for Agents
 
@@ -198,14 +274,20 @@ No other external Go dependencies. Standard library used for HTTP, JSON, audio p
 3. Ensure output is `[]float32` normalized to [-1, 1] at 16kHz
 
 ### Modifying API Response
-1. Add/modify structs in `main.go`
-2. Update relevant handler function
+1. Add/modify structs in `internal/server/types.go`
+2. Update relevant handler in `internal/server/handlers.go`
 3. Follow OpenAI response format conventions
 
+### Adding a New Endpoint
+1. Add handler method to `internal/server/handlers.go`
+2. Register route in `internal/server/server.go:setupRoutes()`
+3. Add types to `internal/server/types.go` if needed
+
 ### Changing Inference Parameters
-- Encoder dim: `internal/asr/transcriber.go:223` (`encoderDim := int64(1024)`)
-- LSTM state: `internal/asr/transcriber.go:282-283` (`stateDim`, `numLayers`)
-- Max tokens per step: `internal/asr/transcriber.go:35` (`maxTokensPerStep`)
+- Encoder dim: `internal/asr/transcriber.go:247` (`encoderDim := int64(1024)`)
+- LSTM state: `internal/asr/transcriber.go:314-315` (`stateDim`, `numLayers`)
+- Max tokens per step: `internal/asr/transcriber.go:39` (`maxTokensPerStep: 10`)
+- Mel features: `internal/asr/mel.go:25-27` (nFFT, hopLength, winLength)
 
 ### Adding a New Makefile Target
 1. Add target with `## Description` comment for help

@@ -17,7 +17,7 @@ GOFMT := gofmt
 GOVET := $(GOCMD) vet
 
 # Docker parameters
-DOCKER_IMAGE := parakeet
+DOCKER_IMAGE := ghcr.io/achetronic/parakeet
 DOCKER_TAG ?= $(VERSION)
 
 # Directories
@@ -179,8 +179,48 @@ release-windows: $(BIN_DIR) ## Build Windows binary
 ## Help target
 
 help: ## Show this help message
-	@echo "Parakeet - Makefile targets"
+	@echo "Parakeet ASR Server - Makefile targets"
 	@echo ""
 	@echo "Usage: make [target]"
 	@echo ""
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
+	@echo "\033[1mBuild:\033[0m"
+	@echo "  \033[36mbuild\033[0m               Build the binary to ./bin/parakeet"
+	@echo "  \033[36mclean\033[0m               Remove build artifacts"
+	@echo ""
+	@echo "\033[1mDevelopment:\033[0m"
+	@echo "  \033[36mrun\033[0m                 Build and run the server with debug mode"
+	@echo "  \033[36mrun-dev\033[0m             Run with custom port (5092) for development"
+	@echo ""
+	@echo "\033[1mCode Quality:\033[0m"
+	@echo "  \033[36mfmt\033[0m                 Format source code"
+	@echo "  \033[36mvet\033[0m                 Run go vet"
+	@echo "  \033[36mlint\033[0m                Run all linters (vet + fmt)"
+	@echo "  \033[36mtest\033[0m                Run tests"
+	@echo "  \033[36mtest-coverage\033[0m       Run tests with coverage report"
+	@echo ""
+	@echo "\033[1mDependencies:\033[0m"
+	@echo "  \033[36mdeps\033[0m                Download Go dependencies"
+	@echo "  \033[36mdeps-tidy\033[0m           Tidy dependencies"
+	@echo "  \033[36mdeps-verify\033[0m         Verify dependencies"
+	@echo "  \033[36mdeps-onnxruntime\033[0m    Install ONNX Runtime library (requires sudo)"
+	@echo ""
+	@echo "\033[1mModels:\033[0m"
+	@echo "  \033[36mmodels\033[0m              Download models (default: int8)"
+	@echo "  \033[36mmodels-int8\033[0m         Download int8 quantized models (~670MB)"
+	@echo "  \033[36mmodels-fp32\033[0m         Download fp32 full precision models (~2.5GB)"
+	@echo ""
+	@echo "\033[1mDocker:\033[0m"
+	@echo "  \033[36mdocker-build-int8\033[0m   Build Docker image with int8 models"
+	@echo "  \033[36mdocker-build-fp32\033[0m   Build Docker image with fp32 models"
+	@echo "  \033[36mdocker-run-int8\033[0m     Run Docker container with int8 models"
+	@echo "  \033[36mdocker-run-fp32\033[0m     Run Docker container with fp32 models"
+	@echo "  \033[36mdocker-push\033[0m         Push Docker images to registry"
+	@echo ""
+	@echo "\033[1mRelease:\033[0m"
+	@echo "  \033[36mrelease\033[0m             Build release binaries for all platforms"
+	@echo "  \033[36mrelease-linux\033[0m       Build Linux binaries (amd64/arm64)"
+	@echo "  \033[36mrelease-darwin\033[0m      Build macOS binaries (amd64/arm64)"
+	@echo "  \033[36mrelease-windows\033[0m     Build Windows binary (amd64)"
+	@echo ""
+	@echo "\033[1mOther:\033[0m"
+	@echo "  \033[36mhelp\033[0m                Show this help message"
