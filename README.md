@@ -1,7 +1,11 @@
-# Parakeet
+<div align="center">
+  <img src="docs/img/parakeet.png" width="120">
+  <h1>Parakeet</h1>
+  <p>A high-performance automatic speech recognition (ASR) server written in Go.<br>
+  It uses NVIDIA's Parakeet TDT 0.6B model through ONNX Runtime to provide speech-to-text transcription via an OpenAI Whisper-compatible API.</p>
+</div>
 
-A high-performance automatic speech recognition (ASR) server written in Go. 
-It uses NVIDIA's Parakeet TDT 0.6B model through ONNX Runtime to provide speech-to-text transcription via an OpenAI Whisper-compatible API.
+<br>
 
 ## Table of Contents
 
