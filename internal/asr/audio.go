@@ -26,11 +26,11 @@ func parseWAV(data []byte) ([]float32, error) {
 	var audioFormat, numChannels uint16
 	var sampleRate, byteRate uint32
 	var blockAlign, bitsPerSample uint16
-	
+
 	for offset < len(data)-8 {
 		chunkID := string(data[offset : offset+4])
 		chunkSize := binary.LittleEndian.Uint32(data[offset+4 : offset+8])
-		
+
 		if chunkID == "fmt " {
 			if chunkSize < 16 {
 				return nil, fmt.Errorf("fmt chunk too small")
@@ -73,13 +73,13 @@ func parseWAV(data []byte) ([]float32, error) {
 
 			return samples, nil
 		}
-		
+
 		offset += 8 + int(chunkSize)
 		if chunkSize%2 != 0 {
 			offset++ // Padding byte
 		}
 	}
-	
+
 	return nil, fmt.Errorf("no data chunk found")
 }
 

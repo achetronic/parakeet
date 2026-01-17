@@ -23,8 +23,8 @@ func NewMelFilterbank(nMels, sampleRate int) *MelFilterbank {
 		nMels:      nMels,
 		sampleRate: sampleRate,
 		nFFT:       512,
-		hopLength:  160,  // 10ms at 16kHz
-		winLength:  400,  // 25ms at 16kHz
+		hopLength:  160, // 10ms at 16kHz
+		winLength:  400, // 25ms at 16kHz
 	}
 	m.filterbank = m.createMelFilterbank()
 	return m
@@ -74,7 +74,7 @@ func (m *MelFilterbank) createMelFilterbank() [][]float64 {
 
 // Extract computes mel filterbank features from audio samples
 func (m *MelFilterbank) Extract(samples []float32) [][]float32 {
-	numFrames := (len(samples) - m.winLength) / m.hopLength + 1
+	numFrames := (len(samples)-m.winLength)/m.hopLength + 1
 	if numFrames <= 0 {
 		if DebugMode {
 			log.Printf("[DEBUG] Mel: not enough samples for even one frame (samples=%d, winLength=%d)", len(samples), m.winLength)
