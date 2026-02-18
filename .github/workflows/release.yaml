@@ -4,6 +4,17 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Target version ref for release tags and Docker image tags (e.g. v1.2.3)'
+        type: string
+        required: true
+      use_master:
+        description: 'Build from master branch instead of the version ref'
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: write
@@ -27,6 +38,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          ref: ${{ (github.event.inputs.use_master == 'true') && 'master' || (github.event.inputs.ref || github.ref) }}
           fetch-depth: 0
 
       - name: Setup Go
@@ -54,6 +66,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ (github.event.inputs.use_master == 'true') && 'master' || (github.event.inputs.ref || github.ref) }}
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -81,7 +95,8 @@ jobs:
             release/*
           generate_release_notes: true
           draft: false
-          prerelease: ${{ contains(github.ref, '-rc') || contains(github.ref, '-beta') || contains(github.ref, '-alpha') }}
+          tag_name: ${{ github.event.inputs.ref || github.ref_name }}
+          prerelease: ${{ contains(github.event.inputs.ref || github.ref, '-rc') || contains(github.event.inputs.ref || github.ref, '-beta') || contains(github.event.inputs.ref || github.ref, '-alpha') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -97,6 +112,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ (github.event.inputs.use_master == 'true') && 'master' || (github.event.inputs.ref || github.ref) }}
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -117,9 +134,9 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=semver,pattern={{version}},suffix=-${{ matrix.precision }}
-            type=semver,pattern={{major}}.{{minor}},suffix=-${{ matrix.precision }}
-            type=semver,pattern={{major}},suffix=-${{ matrix.precision }}
+            type=semver,pattern={{version}},suffix=-${{ matrix.precision }},value=${{ github.event.inputs.ref || github.ref_name }}
+            type=semver,pattern={{major}}.{{minor}},suffix=-${{ matrix.precision }},value=${{ github.event.inputs.ref || github.ref_name }}
+            type=semver,pattern={{major}},suffix=-${{ matrix.precision }},value=${{ github.event.inputs.ref || github.ref_name }}
             type=raw,value=latest-${{ matrix.precision }}
             type=raw,value=latest,enable=${{ matrix.precision == 'int8' }}
 
