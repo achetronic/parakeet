@@ -138,7 +138,6 @@ jobs:
             type=semver,pattern={{major}}.{{minor}},suffix=-${{ matrix.precision }},value=${{ github.event.inputs.ref || github.ref_name }}
             type=semver,pattern={{major}},suffix=-${{ matrix.precision }},value=${{ github.event.inputs.ref || github.ref_name }}
             type=raw,value=latest-${{ matrix.precision }}
-            type=raw,value=latest,enable=${{ matrix.precision == 'int8' }}
 
       - name: Build and push
         uses: docker/build-push-action@v5
@@ -152,3 +151,24 @@ jobs:
             MODEL_PRECISION=${{ matrix.precision }}
           cache-from: type=gha,scope=${{ matrix.precision }}
           cache-to: type=gha,mode=max,scope=${{ matrix.precision }}
+
+  docker-latest:
+    name: Tag latest from int8
+    runs-on: ubuntu-latest
+    needs: docker
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create latest tag from int8
+        run: |
+          docker buildx imagetools create \
+            --tag ghcr.io/${{ github.repository }}:latest \
+            ghcr.io/${{ github.repository }}:latest-int8
