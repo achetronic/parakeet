@@ -53,8 +53,8 @@
   <rect x="506" y="486" width="160" height="40" rx="20" fill="#238636" opacity="0.18" stroke="#238636" stroke-width="1"/>
   <text x="586" y="512" font-family="'Segoe UI', system-ui, sans-serif" font-size="15" font-weight="600" fill="#2ea043" text-anchor="middle">Docker ready</text>
 
-  <rect x="680" y="486" width="200" height="40" rx="20" fill="#b08800" opacity="0.15" stroke="#b08800" stroke-width="1"/>
-  <text x="780" y="512" font-family="'Segoe UI', system-ui, sans-serif" font-size="15" font-weight="600" fill="#e3b341" text-anchor="middle">int8 &amp; fp32 models</text>
+  <rect x="680" y="486" width="240" height="40" rx="20" fill="#b08800" opacity="0.15" stroke="#b08800" stroke-width="1"/>
+  <text x="800" y="512" font-family="'Segoe UI', system-ui, sans-serif" font-size="15" font-weight="600" fill="#e3b341" text-anchor="middle">int8 (CPU) · fp32 (GPU)</text>
 
   <rect x="0" y="636" width="1280" height="4" fill="#21262d"/>
 </svg>
