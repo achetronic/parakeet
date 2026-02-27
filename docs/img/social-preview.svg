@@ -54,7 +54,7 @@
   <text x="586" y="512" font-family="'Segoe UI', system-ui, sans-serif" font-size="15" font-weight="600" fill="#2ea043" text-anchor="middle">🐳 Docker</text>
 
   <rect x="680" y="486" width="240" height="40" rx="20" fill="#b08800" opacity="0.15" stroke="#b08800" stroke-width="1"/>
-  <text x="800" y="512" font-family="'Segoe UI', system-ui, sans-serif" font-size="15" font-weight="600" fill="#e3b341" text-anchor="middle">int8 (CPU) · fp32 (GPU)</text>
+  <text x="800" y="512" font-family="'Segoe UI', system-ui, sans-serif" font-size="15" font-weight="600" fill="#e3b341" text-anchor="middle">INT8 (CPU) · FP32 (GPU)</text>
 
   <rect x="0" y="636" width="1280" height="4" fill="#21262d"/>
 </svg>
