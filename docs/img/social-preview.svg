@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0d1117"/>
+      <stop offset="100%" style="stop-color:#161b22"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#238636"/>
+      <stop offset="100%" style="stop-color:#2ea043"/>
+    </linearGradient>
+    <linearGradient id="cardGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#21262d"/>
+      <stop offset="100%" style="stop-color:#161b22"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1280" height="640" fill="url(#bg)"/>
+
+  <!-- Subtle grid pattern -->
+  <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+    <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#ffffff" stroke-width="0.15" stroke-opacity="0.06"/>
+  </pattern>
+  <rect width="1280" height="640" fill="url(#grid)"/>
+
+  <!-- Top accent bar -->
+  <rect x="0" y="0" width="1280" height="4" fill="url(#accent)"/>
+
+  <!-- Left glow blob -->
+  <ellipse cx="160" cy="320" rx="220" ry="200" fill="#238636" opacity="0.07"/>
+  <!-- Right glow blob -->
+  <ellipse cx="1100" cy="200" rx="180" ry="160" fill="#1f6feb" opacity="0.07"/>
+
+  <!-- Bird icon (parakeet silhouette, simple geometric) -->
+  <g transform="translate(96, 260)">
+    <!-- Body -->
+    <ellipse cx="52" cy="54" rx="38" ry="28" fill="#2ea043" opacity="0.95"/>
+    <!-- Head -->
+    <circle cx="82" cy="32" r="22" fill="#2ea043" opacity="0.95"/>
+    <!-- Eye -->
+    <circle cx="90" cy="27" r="5" fill="#0d1117"/>
+    <circle cx="91" cy="26" r="2" fill="#ffffff"/>
+    <!-- Beak -->
+    <polygon points="104,30 118,34 104,38" fill="#e6b800"/>
+    <!-- Wing detail -->
+    <ellipse cx="38" cy="58" rx="22" ry="14" fill="#238636" opacity="0.8"/>
+    <!-- Tail -->
+    <path d="M 18 62 Q 0 80 8 95 Q 20 78 30 72 Z" fill="#238636" opacity="0.9"/>
+    <!-- Tail feather 2 -->
+    <path d="M 22 66 Q 6 90 16 102 Q 26 84 34 76 Z" fill="#2ea043" opacity="0.7"/>
+  </g>
+
+  <!-- Main title -->
+  <text x="248" y="310" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="88" font-weight="700" fill="#f0f6fc" letter-spacing="-2">Parakeet</text>
+
+  <!-- Subtitle -->
+  <text x="250" y="364" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="26" font-weight="400" fill="#8b949e">High-performance ASR server · OpenAI Whisper-compatible API</text>
+
+  <!-- Divider line -->
+  <rect x="248" y="385" width="600" height="2" fill="#238636" opacity="0.5" rx="1"/>
+
+  <!-- Author tag -->
+  <text x="250" y="418" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="20" fill="#6e7681">github.com/achetronic/parakeet</text>
+
+  <!-- Feature cards (right side) -->
+  <!-- Card 1 -->
+  <rect x="780" y="80" width="440" height="100" rx="10" fill="url(#cardGrad)" stroke="#30363d" stroke-width="1"/>
+  <text x="810" y="122" font-family="'Segoe UI', system-ui, sans-serif" font-size="15" font-weight="600" fill="#58a6ff">⚡ NVIDIA Parakeet TDT 0.6B</text>
+  <text x="810" y="148" font-family="'Segoe UI', system-ui, sans-serif" font-size="14" fill="#8b949e">Via ONNX Runtime · No Python deps · CPU inference</text>
+
+  <!-- Card 2 -->
+  <rect x="780" y="198" width="440" height="100" rx="10" fill="url(#cardGrad)" stroke="#30363d" stroke-width="1"/>
+  <text x="810" y="240" font-family="'Segoe UI', system-ui, sans-serif" font-size="15" font-weight="600" fill="#58a6ff">🔌 Drop-in Whisper replacement</text>
+  <text x="810" y="266" font-family="'Segoe UI', system-ui, sans-serif" font-size="14" fill="#8b949e">JSON · text · SRT · VTT · verbose_json</text>
+
+  <!-- Card 3 -->
+  <rect x="780" y="316" width="440" height="100" rx="10" fill="url(#cardGrad)" stroke="#30363d" stroke-width="1"/>
+  <text x="810" y="358" font-family="'Segoe UI', system-ui, sans-serif" font-size="15" font-weight="600" fill="#58a6ff">🌍 25+ languages</text>
+  <text x="810" y="384" font-family="'Segoe UI', system-ui, sans-serif" font-size="14" fill="#8b949e">Multilingual support · int8 quantized · ~2GB RAM</text>
+
+  <!-- Card 4 -->
+  <rect x="780" y="434" width="440" height="100" rx="10" fill="url(#cardGrad)" stroke="#30363d" stroke-width="1"/>
+  <text x="810" y="476" font-family="'Segoe UI', system-ui, sans-serif" font-size="15" font-weight="600" fill="#58a6ff">🐹 Written in Go</text>
+  <text x="810" y="502" font-family="'Segoe UI', system-ui, sans-serif" font-size="14" fill="#8b949e">Single binary · Docker ready · production-grade</text>
+
+  <!-- Bottom badges -->
+  <rect x="248" y="450" width="120" height="34" rx="6" fill="#238636" opacity="0.2" stroke="#238636" stroke-width="1"/>
+  <text x="308" y="472" font-family="'Segoe UI', system-ui, sans-serif" font-size="14" font-weight="600" fill="#2ea043" text-anchor="middle">MIT License</text>
+
+  <rect x="384" y="450" width="120" height="34" rx="6" fill="#1f6feb" opacity="0.15" stroke="#1f6feb" stroke-width="1"/>
+  <text x="444" y="472" font-family="'Segoe UI', system-ui, sans-serif" font-size="14" font-weight="600" fill="#58a6ff" text-anchor="middle">Port :5092</text>
+
+  <rect x="520" y="450" width="120" height="34" rx="6" fill="#6e40c9" opacity="0.15" stroke="#6e40c9" stroke-width="1"/>
+  <text x="580" y="472" font-family="'Segoe UI', system-ui, sans-serif" font-size="14" font-weight="600" fill="#a371f7" text-anchor="middle">Go 1.21+</text>
+
+  <!-- Bottom border -->
+  <rect x="0" y="636" width="1280" height="4" fill="#21262d"/>
+</svg>
