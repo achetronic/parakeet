@@ -32,7 +32,7 @@
 
   <text x="310" y="220" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="100" font-weight="700" fill="#f0f6fc" letter-spacing="-3">Parakeet</text>
   <text x="312" y="275" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="28" font-weight="400" fill="#8b949e">High-performance ASR server written in Go</text>
-  <text x="312" y="315" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="24" font-weight="400" fill="#6e7681">OpenAI Whisper-compatible API · Containerized</text>
+  <text x="312" y="315" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="24" font-weight="400" fill="#6e7681">OpenAI Whisper-compatible API</text>
   <rect x="312" y="345" width="700" height="2" fill="#238636" opacity="0.4" rx="1"/>
   <text x="314" y="382" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="22" fill="#6e7681">github.com/achetronic/parakeet</text>
 
@@ -51,7 +51,7 @@
   <text x="402" y="512" font-family="'Segoe UI', system-ui, sans-serif" font-size="15" font-weight="600" fill="#58a6ff" text-anchor="middle">JSON · SRT · VTT</text>
 
   <rect x="506" y="486" width="160" height="40" rx="20" fill="#238636" opacity="0.18" stroke="#238636" stroke-width="1"/>
-  <text x="586" y="512" font-family="'Segoe UI', system-ui, sans-serif" font-size="15" font-weight="600" fill="#2ea043" text-anchor="middle">Docker ready</text>
+  <text x="586" y="512" font-family="'Segoe UI', system-ui, sans-serif" font-size="15" font-weight="600" fill="#2ea043" text-anchor="middle">🐳 Docker</text>
 
   <rect x="680" y="486" width="240" height="40" rx="20" fill="#b08800" opacity="0.15" stroke="#b08800" stroke-width="1"/>
   <text x="800" y="512" font-family="'Segoe UI', system-ui, sans-serif" font-size="15" font-weight="600" fill="#e3b341" text-anchor="middle">int8 (CPU) · fp32 (GPU)</text>
