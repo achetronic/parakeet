@@ -9,22 +9,13 @@
       <stop offset="100%" style="stop-color:#2ea043"/>
     </linearGradient>
   </defs>
-
-  <!-- Background -->
   <rect width="1280" height="640" fill="url(#bg)"/>
-
-  <!-- Subtle grid -->
   <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
     <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#ffffff" stroke-width="0.15" stroke-opacity="0.05"/>
   </pattern>
   <rect width="1280" height="640" fill="url(#grid)"/>
-
-  <!-- Top accent bar -->
   <rect x="0" y="0" width="1280" height="4" fill="url(#accent)"/>
-
-  <!-- Glow blob behind bird -->
   <ellipse cx="200" cy="300" rx="260" ry="220" fill="#238636" opacity="0.06"/>
-
   <g transform="translate(40, 215) scale(0.088)">
     <path transform="translate(0,0)" fill="rgb(1,1,1)" d="M 1175.6 14.4756 C 1239.21 15.254 1304.46 38.0917 1318.55 107.609 C 1331.2 117.036 1334.16 120.304 1334.64 136.16 C 1349.71 148.868 1358.82 162.794 1364.61 181.777 C 1372.68 207.743 1370.03 235.858 1357.25 259.857 C 1352.92 267.872 1338.33 290.756 1327.84 283.957 C 1325.94 278.933 1324.44 264.847 1323.64 258.843 C 1311.64 271.442 1300.75 275.619 1284.45 279.262 C 1269.14 321.568 1273.14 358.184 1274.68 402.496 C 1280.68 575.028 1143.25 725.765 974.897 748.892 C 952.55 751.961 923.416 750.412 900.083 750.378 L 780.776 750.474 L 577.674 1014.65 C 575.436 1017.52 573.07 1020.28 570.582 1022.94 C 543.879 1051.79 517.742 1054.51 481.261 1055.85 C 486.726 1045.96 497.601 1030.28 504.014 1019.85 L 558.508 930.918 L 604.821 855.704 C 612.854 842.791 623.219 825.162 632.148 813.409 C 612.077 824.289 591.637 834.475 570.865 843.951 C 585.095 819.476 604.273 790.926 619.672 765.987 L 730.409 585.739 L 827.291 427.611 C 843.788 400.656 860.365 373.102 877.137 346.339 C 885.394 333.162 905.09 316.916 916.524 305.289 C 936.701 284.773 953.358 266.548 968.724 242.045 C 980.989 222.081 991.207 200.93 999.223 178.913 C 1014.23 137.201 1020.37 99.8955 1053.53 65.9541 C 1088.89 29.7616 1126.87 16.5646 1175.6 14.4756 z" id="path2" />
     <path transform="translate(0,0)" fill="rgb(139,213,25)" d="M 954.397 295.967 C 998.491 252.869 1017.4 195.883 1035.12 139.432 C 1050.4 90.7923 1095.38 47.6058 1146.05 39.5219 C 1159.99 37.2972 1176.71 34.9142 1191.11 36.8122 C 1233.75 39.3522 1283.18 60.6944 1296.61 104.784 C 1256.21 106.515 1240.94 143 1251.28 178.356 C 1240.6 208.054 1237.21 251.977 1263.46 274.799 C 1256.74 293.361 1252.43 307.305 1251.66 327.272 C 1252.05 401.249 1258.88 472.386 1223.29 540.605 C 1220.78 545.421 1212.14 564.795 1208.75 567.166 C 1204.04 577.779 1192.14 593.79 1184.83 602.942 C 1146.24 651.26 1095.33 688.262 1037.46 710.041 C 1021.65 716.103 994.513 723.918 977.491 725.65 C 962.77 728.201 943.163 728.001 928.032 727.994 L 851.494 727.853 C 836.992 727.831 816.468 727.299 802.483 729.015 C 826.1 717.571 856.79 698.759 880.849 690.373 C 882.16 688.525 900.659 679.759 904.515 677.851 L 965.703 647.138 C 1030.22 614.598 1068.55 589.682 1101.05 520.999 C 1139.87 438.969 1128.96 334.628 1035.16 298.335 C 1011.32 289.112 978.625 286.86 954.397 295.967 z" id="path3" />
@@ -39,59 +30,31 @@
     <path transform="translate(0,0)" fill="rgb(253,144,16)" d="M 1264.11 211.807 C 1281.17 227.061 1292.71 232.962 1313.54 241.512 C 1309.67 245.334 1307.15 247.364 1302.81 250.678 C 1265.2 273.776 1263.65 241.072 1264.11 211.807 z" id="path12" />
   </g>
 
-  <!-- Title -->
   <text x="310" y="220" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="100" font-weight="700" fill="#f0f6fc" letter-spacing="-3">Parakeet</text>
-
-  <!-- Subtitle line 1 -->
   <text x="312" y="275" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="28" font-weight="400" fill="#8b949e">High-performance ASR server written in Go</text>
-
-  <!-- Subtitle line 2 -->
   <text x="312" y="315" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="24" font-weight="400" fill="#6e7681">OpenAI Whisper-compatible API · No Python deps</text>
-
-  <!-- Divider -->
   <rect x="312" y="345" width="700" height="2" fill="#238636" opacity="0.4" rx="1"/>
-
-  <!-- Repo URL -->
   <text x="314" y="382" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="22" fill="#6e7681">github.com/achetronic/parakeet</text>
 
-  <!-- Feature pills row 1 -->
-  <!-- Pill: NVIDIA Parakeet TDT 0.6B -->
+  <!-- Row 1 pills -->
   <rect x="312" y="430" width="280" height="40" rx="20" fill="#238636" opacity="0.18" stroke="#238636" stroke-width="1"/>
   <text x="452" y="456" font-family="'Segoe UI', system-ui, sans-serif" font-size="15" font-weight="600" fill="#2ea043" text-anchor="middle">NVIDIA Parakeet TDT 0.6B</text>
 
-  <!-- Pill: ONNX Runtime -->
   <rect x="606" y="430" width="180" height="40" rx="20" fill="#1f6feb" opacity="0.15" stroke="#1f6feb" stroke-width="1"/>
   <text x="696" y="456" font-family="'Segoe UI', system-ui, sans-serif" font-size="15" font-weight="600" fill="#58a6ff" text-anchor="middle">ONNX Runtime</text>
 
-  <!-- Pill: 25+ languages -->
   <rect x="800" y="430" width="160" height="40" rx="20" fill="#6e40c9" opacity="0.15" stroke="#6e40c9" stroke-width="1"/>
   <text x="880" y="456" font-family="'Segoe UI', system-ui, sans-serif" font-size="15" font-weight="600" fill="#a371f7" text-anchor="middle">25+ languages</text>
 
-  <!-- Pill: int8 quantized -->
-  <rect x="974" y="430" width="160" height="40" rx="20" fill="#b08800" opacity="0.15" stroke="#b08800" stroke-width="1"/>
-  <text x="1054" y="456" font-family="'Segoe UI', system-ui, sans-serif" font-size="15" font-weight="600" fill="#e3b341" text-anchor="middle">int8 quantized</text>
-
-  <!-- Feature pills row 2 -->
-  <!-- Pill: JSON/SRT/VTT -->
+  <!-- Row 2 pills -->
   <rect x="312" y="486" width="180" height="40" rx="20" fill="#1f6feb" opacity="0.15" stroke="#1f6feb" stroke-width="1"/>
   <text x="402" y="512" font-family="'Segoe UI', system-ui, sans-serif" font-size="15" font-weight="600" fill="#58a6ff" text-anchor="middle">JSON · SRT · VTT</text>
 
-  <!-- Pill: Docker ready -->
   <rect x="506" y="486" width="160" height="40" rx="20" fill="#238636" opacity="0.18" stroke="#238636" stroke-width="1"/>
   <text x="586" y="512" font-family="'Segoe UI', system-ui, sans-serif" font-size="15" font-weight="600" fill="#2ea043" text-anchor="middle">Docker ready</text>
 
-  <!-- Pill: MIT License -->
-  <rect x="680" y="486" width="140" height="40" rx="20" fill="#6e40c9" opacity="0.15" stroke="#6e40c9" stroke-width="1"/>
-  <text x="750" y="512" font-family="'Segoe UI', system-ui, sans-serif" font-size="15" font-weight="600" fill="#a371f7" text-anchor="middle">MIT License</text>
+  <rect x="680" y="486" width="200" height="40" rx="20" fill="#b08800" opacity="0.15" stroke="#b08800" stroke-width="1"/>
+  <text x="780" y="512" font-family="'Segoe UI', system-ui, sans-serif" font-size="15" font-weight="600" fill="#e3b341" text-anchor="middle">int8 &amp; fp32 models</text>
 
-  <!-- Pill: Go 1.21+ -->
-  <rect x="834" y="486" width="120" height="40" rx="20" fill="#b08800" opacity="0.15" stroke="#b08800" stroke-width="1"/>
-  <text x="894" y="512" font-family="'Segoe UI', system-ui, sans-serif" font-size="15" font-weight="600" fill="#e3b341" text-anchor="middle">Go 1.21+</text>
-
-  <!-- Pill: Port 5092 -->
-  <rect x="968" y="486" width="140" height="40" rx="20" fill="#1f6feb" opacity="0.15" stroke="#1f6feb" stroke-width="1"/>
-  <text x="1038" y="512" font-family="'Segoe UI', system-ui, sans-serif" font-size="15" font-weight="600" fill="#58a6ff" text-anchor="middle">Port :5092</text>
-
-  <!-- Bottom border -->
   <rect x="0" y="636" width="1280" height="4" fill="#21262d"/>
 </svg>
