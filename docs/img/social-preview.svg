@@ -32,7 +32,7 @@
 
   <text x="310" y="220" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="100" font-weight="700" fill="#f0f6fc" letter-spacing="-3">Parakeet</text>
   <text x="312" y="275" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="28" font-weight="400" fill="#8b949e">High-performance ASR server written in Go</text>
-  <text x="312" y="315" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="24" font-weight="400" fill="#6e7681">OpenAI Whisper-compatible API · No Python deps</text>
+  <text x="312" y="315" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="24" font-weight="400" fill="#6e7681">OpenAI Whisper-compatible API · Containerized</text>
   <rect x="312" y="345" width="700" height="2" fill="#238636" opacity="0.4" rx="1"/>
   <text x="314" y="382" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="22" fill="#6e7681">github.com/achetronic/parakeet</text>
 
