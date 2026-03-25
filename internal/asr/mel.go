@@ -1,7 +1,7 @@
 package asr
 
 import (
-	"log"
+	"log/slog"
 	"math"
 	"math/cmplx"
 )
@@ -77,7 +77,7 @@ func (m *MelFilterbank) Extract(samples []float32) [][]float32 {
 	numFrames := (len(samples)-m.winLength)/m.hopLength + 1
 	if numFrames <= 0 {
 		if DebugMode {
-			log.Printf("[DEBUG] Mel: not enough samples for even one frame (samples=%d, winLength=%d)", len(samples), m.winLength)
+			slog.Debug("not enough samples for mel frame", "samples", len(samples), "winLength", m.winLength)
 		}
 		return nil
 	}

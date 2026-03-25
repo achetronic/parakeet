@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -146,7 +146,7 @@ func (t *Transcriber) loadVocab(path string) error {
 	t.vocabSize = len(t.vocab)
 
 	if DebugMode {
-		log.Printf("[DEBUG] Vocab loaded: %d tokens, blankIdx=%d", t.vocabSize, t.blankIdx)
+		slog.Debug("vocab loaded", "tokens", t.vocabSize, "blankIdx", t.blankIdx)
 	}
 
 	return scanner.Err()

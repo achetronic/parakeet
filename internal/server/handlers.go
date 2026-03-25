@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -109,8 +109,12 @@ func (s *Server) handleTranscription(w http.ResponseWriter, r *http.Request) {
 		language = "en"
 	}
 
-	log.Printf("Transcribing %s (%d bytes, language=%s, format=%s)",
-		header.Filename, len(audioData), language, responseFormat)
+	slog.Info("transcribing",
+		"file", header.Filename,
+		"bytes", len(audioData),
+		"language", language,
+		"format", responseFormat,
+	)
 
 	// Determine audio format from extension
 	ext := strings.ToLower(filepath.Ext(header.Filename))
@@ -123,7 +127,7 @@ func (s *Server) handleTranscription(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if asr.DebugMode {
-		log.Printf("[DEBUG] Transcription result: %s", text)
+		slog.Debug("transcription result", "text", text)
 	}
 
 	// Calculate approximate duration (16kHz, 16-bit mono)

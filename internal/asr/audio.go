@@ -3,7 +3,7 @@ package asr
 import (
 	"encoding/binary"
 	"fmt"
-	"log"
+	"log/slog"
 	"math"
 )
 
@@ -52,8 +52,13 @@ func parseWAV(data []byte) ([]float32, error) {
 			audioData := data[dataStart:dataEnd]
 
 			if DebugMode {
-				log.Printf("[DEBUG] WAV: format=%d, channels=%d, sampleRate=%d, bitsPerSample=%d, dataSize=%d",
-					audioFormat, numChannels, sampleRate, bitsPerSample, len(audioData))
+				slog.Debug("WAV parsed",
+					"format", audioFormat,
+					"channels", numChannels,
+					"sampleRate", sampleRate,
+					"bitsPerSample", bitsPerSample,
+					"dataSize", len(audioData),
+				)
 			}
 
 			// Convert to float32
@@ -65,8 +70,12 @@ func parseWAV(data []byte) ([]float32, error) {
 			// Resample to 16kHz if needed
 			if sampleRate != 16000 {
 				if DebugMode {
-					log.Printf("[DEBUG] Resampling from %d Hz to 16000 Hz (%d -> %d samples)",
-						sampleRate, len(samples), int(float64(len(samples))*16000.0/float64(sampleRate)))
+					slog.Debug("resampling",
+						"from", sampleRate,
+						"to", 16000,
+						"samplesIn", len(samples),
+						"samplesOut", int(float64(len(samples))*16000.0/float64(sampleRate)),
+					)
 				}
 				samples = resample(samples, int(sampleRate), 16000)
 			}

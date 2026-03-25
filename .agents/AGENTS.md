@@ -22,7 +22,7 @@ make build                  # Build to ./bin/parakeet
 make run                    # Build and run with debug mode
 make run-dev                # Run with custom port (5092) for development
 ./bin/parakeet              # Run binary directly
-./bin/parakeet -port 8080 -models /path/to/models -debug=true
+./bin/parakeet -port 8080 -models /path/to/models -log-level=debug -log-format=json
 
 # Download models
 make models                 # Download int8 models (default, ~670MB)
@@ -74,6 +74,10 @@ parakeet/
 ├── bin/                    # Build output directory
 ├── Makefile                # Build recipes
 ├── Dockerfile              # Multi-stage container build
+├── .agents/                # AI agent documentation
+│   ├── AGENTS.md           # This file - codebase guide for agents
+│   ├── TODO.md             # Pending tasks and improvements
+│   └── DESIGN_DECISIONS.md # Architectural decisions record
 ├── .github/
 │   └── workflows/
 │       ├── ci.yaml         # CI pipeline (lint, test, build)
@@ -84,18 +88,20 @@ parakeet/
 ## Code Organization
 
 ### `main.go` (Entry Point)
-- Parses CLI flags: `-port`, `-models`, `-debug`
+- Parses CLI flags: `-port`, `-models`, `-log-level`, `-log-format`
+- Configures `slog` global logger (text or JSON handler, four log levels)
 - Creates and runs the server
-- Default port: 5092, default models dir: `./models`
+- Default port: 5092, default models dir: `./models`, default log level: `info`, default log format: `text`
 
 ### `internal/server/` (HTTP Server Package)
 
 #### `server.go`
 - `Config` struct: Port, ModelsDir, Debug settings
-- `Server` struct: wraps config, transcriber, and HTTP mux
-- `New()` - Initializes transcriber and routes
+- `Server` struct: wraps config, transcriber, HTTP mux, and API key
+- `New()` - Initializes transcriber, reads `PARAKEET_API_KEY` env var, and sets up routes
 - `Run()` - Starts HTTP listener
 - `Close()` - Releases resources
+- `requireAuth()` - Middleware that validates `Authorization: Bearer <key>` on `/v1/*` routes
 
 #### `handlers.go`
 - `handleTranscription()` - Main endpoint, parses multipart form, returns transcription
@@ -176,65 +182,12 @@ parakeet/
 - JSON structs use tags: `json:"field_name"` with `omitempty` where appropriate
 - OpenAI-compatible response structures
 
-## Model Architecture Details
-
-### Encoder
-- Conformer architecture with 1024-dim output
-- Input: mel features [batch, 128 features, time]
-- Output: encoded features [batch, 1024, time/8]
-- Subsampling factor: 8x
-
-### TDT Decoder
-- Token-and-Duration Transducer
-- Vocab size: 8193 tokens (8192 + blank)
-- Duration classes: 5 (predicts how many encoder steps to advance)
-- LSTM state: 2 layers x 640 dim
-- Greedy decoding with max 10 tokens per timestep
-
-### Vocab Format
-```
-▁token 123
-```
-- SentencePiece format with `▁` (U+2581) as word boundary marker
-- Special token: `<blk>` (blank) at index 8192
-
-## Important Gotchas
-
-### ONNX Runtime Library
-- Must be installed separately (not vendored)
-- Set `ONNXRUNTIME_LIB` env var if not in standard paths
-- Auto-detection checks common paths in Makefile and transcriber.go
-- Use `make deps-onnxruntime` to install (requires sudo)
-- Compatible version: 1.21.x for onnxruntime_go v1.19.0
-
-### Model Files Required
-- `encoder-model.int8.onnx` (~652MB) or `encoder-model.onnx` (~2.5GB)
-- `decoder_joint-model.int8.onnx` (~18MB) or `decoder_joint-model.onnx` (~72MB)
-- `config.json`, `vocab.txt`, `nemo128.onnx`
-- Download via `make models` or manually from HuggingFace
-
-### Audio Format Limitations
-- Currently **only WAV** format is supported
-- WebM, OGG, MP3, M4A return "requires ffmpeg conversion - not yet implemented"
-- All audio resampled to 16kHz mono internally
-- Minimum audio length: 100ms (1600 samples at 16kHz)
-
-### Tensor Memory Management
-- Tensors must be destroyed manually (no GC)
-- The TDT decode loop creates/destroys tensors each iteration
-- Memory usage: ~2GB RAM for int8 models, ~6GB for fp32
-
-### API Compatibility Notes
-- `model` parameter accepted but ignored (only one model)
-- `prompt` and `temperature` parameters accepted but ignored
-- `language` defaults to "en" if not specified
-- Translation endpoint just calls transcription
-
 ## Environment Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `ONNXRUNTIME_LIB` | Path to libonnxruntime.so | Auto-detect |
+| `PARAKEET_API_KEY` | API key for `/v1/*` endpoint authentication | Empty (auth disabled) |
 
 ## Dependencies
 
@@ -280,7 +233,7 @@ No other external Go dependencies. Standard library used for HTTP, JSON, audio p
 
 ### Adding a New Endpoint
 1. Add handler method to `internal/server/handlers.go`
-2. Register route in `internal/server/server.go:setupRoutes()`
+2. Register route in `internal/server/server.go:setupRoutes()` — wrap with `s.requireAuth()` for authenticated endpoints
 3. Add types to `internal/server/types.go` if needed
 
 ### Changing Inference Parameters
@@ -298,3 +251,23 @@ No other external Go dependencies. Standard library used for HTTP, JSON, audio p
 1. Tag with semver: `git tag v1.0.0`
 2. Push tag: `git push origin v1.0.0`
 3. Release pipeline builds and publishes automatically
+
+## Important Gotchas
+
+### ONNX Runtime Library
+- Must be installed separately (not vendored)
+- Set `ONNXRUNTIME_LIB` env var if not in standard paths
+- Auto-detection checks common paths in Makefile and transcriber.go
+- Use `make deps-onnxruntime` to install (requires sudo)
+- Compatible version: 1.21.x for onnxruntime_go v1.19.0
+
+### Model Files Required
+- `encoder-model.int8.onnx` (~652MB) or `encoder-model.onnx` (~2.5GB)
+- `decoder_joint-model.int8.onnx` (~18MB) or `decoder_joint-model.onnx` (~72MB)
+- `config.json`, `vocab.txt`, `nemo128.onnx`
+- Download via `make models` or manually from HuggingFace
+
+### Tensor Memory Management
+- Tensors must be destroyed manually (no GC)
+- The TDT decode loop creates/destroys tensors each iteration
+- Memory usage: ~2GB RAM for int8 models, ~6GB for fp32

@@ -35,8 +35,10 @@ Parakeet ASR Server provides a lightweight, production-ready speech recognition 
 Key features:
 
 - OpenAI Whisper-compatible REST API
+- API key authentication (optional, via environment variable)
 - ONNX Runtime inference (CPU)
 - No Python or external dependencies at runtime
+- Structured logging with `slog` (text and JSON formats, configurable log level)
 - Support for multiple response formats (JSON, text, SRT, VTT)
 - Multilingual support (English and 25+ languages)
 - Quantized model support for reduced memory footprint
@@ -239,6 +241,8 @@ services:
       - "5092:5092"
     volumes:
       - ./models:/models
+    environment:
+      - PARAKEET_API_KEY=your-secret-key  # optional
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5092/health"]
@@ -255,7 +259,8 @@ services:
 |------|-------------|---------|---------|
 | `-port` | HTTP server port | `5092` | `-port 8080` |
 | `-models` | Path to models directory | `./models` | `-models /opt/parakeet/models` |
-| `-debug` | Enable debug logging (verbose output for troubleshooting) | `false` | `-debug` |
+| `-log-level` | Log level: debug, info, warn, error | `info` | `-log-level debug` |
+| `-log-format` | Log output format: text or json | `text` | `-log-format json` |
 
 **Examples:**
 
@@ -267,10 +272,16 @@ services:
 ./parakeet -port 8080 -models /opt/models
 
 # Enable debug logging for troubleshooting
-./parakeet -debug
+./parakeet -log-level debug
+
+# JSON logs for production (e.g. log aggregation with ELK, Loki, CloudWatch)
+./parakeet -log-format json
+
+# JSON logs with debug level
+./parakeet -log-format json -log-level debug
 
 # Suppress ONNX Runtime schema warnings (stderr) while keeping debug logs
-./parakeet -debug 2>&1 | grep -v "Schema error"
+./parakeet -log-level debug 2>&1 | grep -v "Schema error"
 ```
 
 ### Environment Variables
@@ -278,6 +289,7 @@ services:
 | Variable          | Description               | Default       |
 |-------------------|---------------------------|---------------|
 | `ONNXRUNTIME_LIB` | Path to libonnxruntime.so | Auto-detected |
+| `PARAKEET_API_KEY` | API key for `/v1/*` endpoint authentication | Empty (auth disabled) |
 
 ### Model Files
 
@@ -293,6 +305,16 @@ The following files are required in the models directory:
 For full precision models, use `encoder-model.onnx` (requires `encoder-model.onnx.data`, 2.5GB total) and `decoder_joint-model.onnx` (72MB).
 
 ## API Reference
+
+### Authentication
+
+When `PARAKEET_API_KEY` is set, all `/v1/*` endpoints require an `Authorization` header:
+
+```bash
+curl -H "Authorization: Bearer YOUR_API_KEY" http://localhost:5092/v1/models
+```
+
+The `/health` endpoint is always unauthenticated.
 
 ### Transcribe Audio
 
@@ -346,6 +368,7 @@ Verbose JSON format:
 
 ```bash
 curl -X POST http://localhost:5092/v1/audio/transcriptions \
+  -H "Authorization: Bearer $PARAKEET_API_KEY" \
   -F file=@audio.wav \
   -F language=en \
   -F response_format=json
@@ -417,13 +440,18 @@ open coverage.html
 
 ```
 parakeet/
-├── main.go                 # HTTP server and API handlers
+├── main.go                 # Entry point, CLI flags, logger setup
 ├── internal/
-│   └── asr/
-│       ├── transcriber.go  # ONNX inference pipeline
-│       ├── mel.go          # Mel filterbank feature extraction
-│       └── audio.go        # WAV parsing and resampling
+│   ├── asr/
+│   │   ├── transcriber.go  # ONNX inference pipeline
+│   │   ├── mel.go          # Mel filterbank feature extraction
+│   │   └── audio.go        # WAV parsing and resampling
+│   └── server/
+│       ├── server.go       # HTTP server, auth middleware, lifecycle
+│       ├── handlers.go     # API endpoint handlers
+│       └── types.go        # Request/response type definitions
 ├── models/                 # ONNX models (not in repository)
+├── .agents/                # AI agent documentation
 ├── Dockerfile
 ├── Makefile
 ├── .github/
