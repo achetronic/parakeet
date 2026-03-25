@@ -8,13 +8,13 @@ import (
 
 // MelFilterbank computes mel-scale filterbank features
 type MelFilterbank struct {
-	nMels       int
-	sampleRate  int
-	nFFT        int
-	hopLength   int
-	winLength   int
-	filterbank  [][]float64
-	hannWindow  []float64
+	nMels      int
+	sampleRate int
+	nFFT       int
+	hopLength  int
+	winLength  int
+	filterbank [][]float64
+	hannWindow []float64
 }
 
 // NewMelFilterbank creates a new mel filterbank extractor
