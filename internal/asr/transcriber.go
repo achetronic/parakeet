@@ -17,10 +17,135 @@ import (
 // DebugMode enables verbose logging
 var DebugMode bool
 
+// Pre-compiled regex for text cleanup
+var whitespaceRegex = regexp.MustCompile(`\s{2,}`)
+
+// Fixed model dimensions for Parakeet TDT 0.6B
+const (
+	encoderDim         int64 = 1024
+	decoderStateDim    int64 = 640
+	decoderNumLayers   int64 = 2
+	numDurationClasses int64 = 5
+)
+
 type Config struct {
 	ModelType         string `json:"model_type"`
 	FeaturesSize      int    `json:"features_size"`
 	SubsamplingFactor int    `json:"subsampling_factor"`
+}
+
+// decoderWorker holds a pre-initialized decoder session with reusable tensors.
+// Each worker is owned by at most one goroutine at a time via the pool channel.
+type decoderWorker struct {
+	session   *ort.AdvancedSession
+	encOut    *ort.Tensor[float32]
+	targets   *ort.Tensor[int32]
+	targetLen *ort.Tensor[int32]
+	state1In  *ort.Tensor[float32]
+	state2In  *ort.Tensor[float32]
+	output    *ort.Tensor[float32]
+	state1Out *ort.Tensor[float32]
+	state2Out *ort.Tensor[float32]
+}
+
+func (w *decoderWorker) destroy() {
+	if w.session != nil {
+		w.session.Destroy()
+	}
+	if w.encOut != nil {
+		w.encOut.Destroy()
+	}
+	if w.targets != nil {
+		w.targets.Destroy()
+	}
+	if w.targetLen != nil {
+		w.targetLen.Destroy()
+	}
+	if w.state1In != nil {
+		w.state1In.Destroy()
+	}
+	if w.state2In != nil {
+		w.state2In.Destroy()
+	}
+	if w.output != nil {
+		w.output.Destroy()
+	}
+	if w.state1Out != nil {
+		w.state1Out.Destroy()
+	}
+	if w.state2Out != nil {
+		w.state2Out.Destroy()
+	}
+}
+
+func newDecoderWorker(decoderPath string, vocabSize int) (*decoderWorker, error) {
+	w := &decoderWorker{}
+	var err error
+
+	outputDim := int64(vocabSize) + numDurationClasses
+
+	w.encOut, err = ort.NewEmptyTensor[float32](ort.NewShape(1, encoderDim, 1))
+	if err != nil {
+		w.destroy()
+		return nil, fmt.Errorf("create encOut tensor: %w", err)
+	}
+
+	w.targets, err = ort.NewEmptyTensor[int32](ort.NewShape(1, 1))
+	if err != nil {
+		w.destroy()
+		return nil, fmt.Errorf("create targets tensor: %w", err)
+	}
+
+	w.targetLen, err = ort.NewTensor(ort.NewShape(1), []int32{1})
+	if err != nil {
+		w.destroy()
+		return nil, fmt.Errorf("create targetLen tensor: %w", err)
+	}
+
+	w.state1In, err = ort.NewEmptyTensor[float32](ort.NewShape(decoderNumLayers, 1, decoderStateDim))
+	if err != nil {
+		w.destroy()
+		return nil, fmt.Errorf("create state1In tensor: %w", err)
+	}
+
+	w.state2In, err = ort.NewEmptyTensor[float32](ort.NewShape(decoderNumLayers, 1, decoderStateDim))
+	if err != nil {
+		w.destroy()
+		return nil, fmt.Errorf("create state2In tensor: %w", err)
+	}
+
+	w.output, err = ort.NewEmptyTensor[float32](ort.NewShape(1, 1, 1, outputDim))
+	if err != nil {
+		w.destroy()
+		return nil, fmt.Errorf("create output tensor: %w", err)
+	}
+
+	w.state1Out, err = ort.NewEmptyTensor[float32](ort.NewShape(decoderNumLayers, 1, decoderStateDim))
+	if err != nil {
+		w.destroy()
+		return nil, fmt.Errorf("create state1Out tensor: %w", err)
+	}
+
+	w.state2Out, err = ort.NewEmptyTensor[float32](ort.NewShape(decoderNumLayers, 1, decoderStateDim))
+	if err != nil {
+		w.destroy()
+		return nil, fmt.Errorf("create state2Out tensor: %w", err)
+	}
+
+	w.session, err = ort.NewAdvancedSession(
+		decoderPath,
+		[]string{"encoder_outputs", "targets", "target_length", "input_states_1", "input_states_2"},
+		[]string{"outputs", "output_states_1", "output_states_2"},
+		[]ort.ArbitraryTensor{w.encOut, w.targets, w.targetLen, w.state1In, w.state2In},
+		[]ort.ArbitraryTensor{w.output, w.state1Out, w.state2Out},
+		nil,
+	)
+	if err != nil {
+		w.destroy()
+		return nil, fmt.Errorf("create decoder session: %w", err)
+	}
+
+	return w, nil
 }
 
 type Transcriber struct {
@@ -28,16 +153,16 @@ type Transcriber struct {
 	vocab            map[int]string
 	vocabSize        int
 	blankIdx         int
-	modelsDir        string
 	maxTokensPerStep int
 	mel              *MelFilterbank
+	encoderPath      string
+	decoderPool      chan *decoderWorker
 }
 
-func NewTranscriber(modelsDir string) (*Transcriber, error) {
+func NewTranscriber(modelsDir string, workers int) (*Transcriber, error) {
 	t := &Transcriber{
-		modelsDir:        modelsDir,
 		maxTokensPerStep: 10,
-		blankIdx:         8192, // <blk> token
+		blankIdx:         8192,
 	}
 
 	// Load config
@@ -50,7 +175,6 @@ func NewTranscriber(modelsDir string) (*Transcriber, error) {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
-	// Set defaults
 	if t.config.FeaturesSize == 0 {
 		t.config.FeaturesSize = 128
 	}
@@ -70,7 +194,6 @@ func NewTranscriber(modelsDir string) (*Transcriber, error) {
 	// Initialize ONNX Runtime
 	libPath := os.Getenv("ONNXRUNTIME_LIB")
 	if libPath == "" {
-		// Try common locations
 		commonPaths := []string{
 			"/usr/lib/libonnxruntime.so",
 			"/usr/lib/x86_64-linux-gnu/libonnxruntime.so",
@@ -86,25 +209,25 @@ func NewTranscriber(modelsDir string) (*Transcriber, error) {
 			}
 		}
 	}
-
-	if libPath != "" {
-		ort.SetSharedLibraryPath(libPath)
-		if err := ort.InitializeEnvironment(); err != nil {
-			return nil, fmt.Errorf("failed to initialize ONNX Runtime: %w", err)
-		}
-	} else {
+	if libPath == "" {
 		return nil, fmt.Errorf("ONNX Runtime library not found. Set ONNXRUNTIME_LIB env var or install libonnxruntime")
 	}
 
-	// Verify model files exist
-	encoderPath := filepath.Join(modelsDir, "encoder-model.int8.onnx")
-	if _, err := os.Stat(encoderPath); os.IsNotExist(err) {
-		encoderPath = filepath.Join(modelsDir, "encoder-model.onnx")
-		if _, err := os.Stat(encoderPath); os.IsNotExist(err) {
+	ort.SetSharedLibraryPath(libPath)
+	if err := ort.InitializeEnvironment(); err != nil {
+		return nil, fmt.Errorf("failed to initialize ONNX Runtime: %w", err)
+	}
+
+	// Resolve encoder path (stored, reused per request)
+	t.encoderPath = filepath.Join(modelsDir, "encoder-model.int8.onnx")
+	if _, err := os.Stat(t.encoderPath); os.IsNotExist(err) {
+		t.encoderPath = filepath.Join(modelsDir, "encoder-model.onnx")
+		if _, err := os.Stat(t.encoderPath); os.IsNotExist(err) {
 			return nil, fmt.Errorf("encoder model not found. Download from https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx")
 		}
 	}
 
+	// Resolve decoder path
 	decoderPath := filepath.Join(modelsDir, "decoder_joint-model.int8.onnx")
 	if _, err := os.Stat(decoderPath); os.IsNotExist(err) {
 		decoderPath = filepath.Join(modelsDir, "decoder_joint-model.onnx")
@@ -112,6 +235,28 @@ func NewTranscriber(modelsDir string) (*Transcriber, error) {
 			return nil, fmt.Errorf("decoder model not found. Download from https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx")
 		}
 	}
+
+	// Create decoder worker pool — each worker owns a persistent session and
+	// pre-allocated tensors. Workers are acquired per request and returned after.
+	if workers < 1 {
+		workers = 1
+	}
+	t.decoderPool = make(chan *decoderWorker, workers)
+	for i := 0; i < workers; i++ {
+		w, err := newDecoderWorker(decoderPath, t.vocabSize)
+		if err != nil {
+			t.Close()
+			return nil, fmt.Errorf("failed to create decoder worker %d: %w", i, err)
+		}
+		t.decoderPool <- w
+	}
+
+	slog.Info("transcriber initialized",
+		"workers", workers,
+		"encoder", filepath.Base(t.encoderPath),
+		"decoder", filepath.Base(decoderPath),
+		"vocabSize", t.vocabSize,
+	)
 
 	return t, nil
 }
@@ -136,7 +281,6 @@ func (t *Transcriber) loadVocab(path string) error {
 		if err != nil {
 			continue
 		}
-		// Replace SentencePiece marker with space
 		token = strings.ReplaceAll(token, "▁", " ")
 		t.vocab[id] = token
 		if token == "<blk>" {
@@ -152,51 +296,53 @@ func (t *Transcriber) loadVocab(path string) error {
 	return scanner.Err()
 }
 
+// Close releases all pool workers and the ONNX Runtime environment.
 func (t *Transcriber) Close() {
+	if t.decoderPool != nil {
+		close(t.decoderPool)
+		for w := range t.decoderPool {
+			w.destroy()
+		}
+	}
 	ort.DestroyEnvironment()
 }
 
 func (t *Transcriber) Transcribe(audioData []byte, format, language string) (string, error) {
-	// Convert audio to float32 waveform at 16kHz
 	waveform, err := t.loadAudio(audioData, format)
 	if err != nil {
 		return "", fmt.Errorf("failed to load audio: %w", err)
 	}
 
 	if DebugMode {
-		log.Printf("[DEBUG] Waveform length: %d samples (%.2f seconds)", len(waveform), float64(len(waveform))/16000.0)
+		slog.Debug("waveform loaded", "samples", len(waveform), "seconds", float64(len(waveform))/16000.0)
 	}
 
-	if len(waveform) < 1600 { // Less than 100ms
+	if len(waveform) < 1600 {
 		if DebugMode {
-			log.Printf("[DEBUG] Audio too short: %d samples", len(waveform))
+			slog.Debug("audio too short, skipping", "samples", len(waveform))
 		}
 		return "", nil
 	}
 
-	// Extract mel features
 	features := t.mel.Extract(waveform)
 	if len(features) == 0 {
 		return "", fmt.Errorf("no features extracted")
 	}
 
 	if DebugMode {
-		log.Printf("[DEBUG] Mel features: %d frames x %d features", len(features), len(features[0]))
+		slog.Debug("mel features extracted", "frames", len(features), "featuresPerFrame", len(features[0]))
 	}
 
-	// Run inference
 	tokens, err := t.runInference(features)
 	if err != nil {
 		return "", fmt.Errorf("inference failed: %w", err)
 	}
 
 	if DebugMode {
-		log.Printf("[DEBUG] Tokens decoded: %d tokens = %v", len(tokens), tokens)
+		slog.Debug("tokens decoded", "count", len(tokens), "tokens", tokens)
 	}
 
-	// Convert tokens to text
-	text := t.tokensToText(tokens)
-	return text, nil
+	return t.tokensToText(tokens), nil
 }
 
 func (t *Transcriber) loadAudio(data []byte, format string) ([]float32, error) {
@@ -206,18 +352,16 @@ func (t *Transcriber) loadAudio(data []byte, format string) ([]float32, error) {
 	case ".webm", ".ogg", ".mp3", ".m4a":
 		return nil, fmt.Errorf("format %s requires ffmpeg conversion - not yet implemented", format)
 	default:
-		// Try to parse as WAV
 		return parseWAV(data)
 	}
 }
 
 func (t *Transcriber) runInference(features [][]float32) ([]int, error) {
-	// Prepare input tensor - shape: [batch, features, time]
 	batchSize := int64(1)
 	numFeatures := int64(t.config.FeaturesSize)
 	numFrames := int64(len(features))
 
-	// Flatten features to [1, features, frames] format (transposed from [frames, features])
+	// Flatten features: [frames, features] → [1, features, frames]
 	inputData := make([]float32, numFeatures*numFrames)
 	for f := int64(0); f < numFrames; f++ {
 		for m := int64(0); m < numFeatures && m < int64(len(features[f])); m++ {
@@ -225,49 +369,36 @@ func (t *Transcriber) runInference(features [][]float32) ([]int, error) {
 		}
 	}
 
-	// Create input tensors
-	inputShape := ort.NewShape(batchSize, numFeatures, numFrames)
-	inputTensor, err := ort.NewTensor(inputShape, inputData)
+	inputTensor, err := ort.NewTensor(ort.NewShape(batchSize, numFeatures, numFrames), inputData)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create input tensor: %w", err)
+		return nil, fmt.Errorf("create input tensor: %w", err)
 	}
 	defer inputTensor.Destroy()
 
-	lengthData := []int64{numFrames}
-	lengthShape := ort.NewShape(batchSize)
-	lengthTensor, err := ort.NewTensor(lengthShape, lengthData)
+	lengthTensor, err := ort.NewTensor(ort.NewShape(batchSize), []int64{numFrames})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create length tensor: %w", err)
+		return nil, fmt.Errorf("create length tensor: %w", err)
 	}
 	defer lengthTensor.Destroy()
 
-	// Encoder output shape: [batch, time/subsampling, encoder_dim]
-	// Estimate output size
 	encodedLen := (numFrames-1)/int64(t.config.SubsamplingFactor) + 1
-	encoderDim := int64(1024) // Typical for Conformer models
 
-	outputShape := ort.NewShape(batchSize, encoderDim, encodedLen)
-	outputTensor, err := ort.NewEmptyTensor[float32](outputShape)
+	outputTensor, err := ort.NewEmptyTensor[float32](ort.NewShape(batchSize, encoderDim, encodedLen))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create output tensor: %w", err)
+		return nil, fmt.Errorf("create output tensor: %w", err)
 	}
 	defer outputTensor.Destroy()
 
-	outLenShape := ort.NewShape(batchSize)
-	outLenTensor, err := ort.NewEmptyTensor[int64](outLenShape)
+	outLenTensor, err := ort.NewEmptyTensor[int64](ort.NewShape(batchSize))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create output length tensor: %w", err)
+		return nil, fmt.Errorf("create output length tensor: %w", err)
 	}
 	defer outLenTensor.Destroy()
 
-	// Load and run encoder
-	encoderPath := filepath.Join(t.modelsDir, "encoder-model.int8.onnx")
-	if _, err := os.Stat(encoderPath); os.IsNotExist(err) {
-		encoderPath = filepath.Join(t.modelsDir, "encoder-model.onnx")
-	}
-
+	// Encoder session is created per request because input shape varies with audio length.
+	// The session object loads the model graph; the file is OS-cached after first request.
 	encoderSession, err := ort.NewAdvancedSession(
-		encoderPath,
+		t.encoderPath,
 		[]string{"audio_signal", "length"},
 		[]string{"outputs", "encoded_lengths"},
 		[]ort.ArbitraryTensor{inputTensor, lengthTensor},
@@ -275,7 +406,7 @@ func (t *Transcriber) runInference(features [][]float32) ([]int, error) {
 		nil,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create encoder session: %w", err)
+		return nil, fmt.Errorf("create encoder session: %w", err)
 	}
 	defer encoderSession.Destroy()
 
@@ -283,193 +414,88 @@ func (t *Transcriber) runInference(features [][]float32) ([]int, error) {
 		return nil, fmt.Errorf("encoder run failed: %w", err)
 	}
 
-	// Get encoder outputs
 	encoderOut := outputTensor.GetData()
 	actualEncodedLen := outLenTensor.GetData()[0]
 
 	if DebugMode {
-		log.Printf("[DEBUG] Encoder output: %d floats, actualEncodedLen=%d", len(encoderOut), actualEncodedLen)
+		slog.Debug("encoder output", "floats", len(encoderOut), "encodedLen", actualEncodedLen)
 	}
 
-	// Now run TDT decoder
-	tokens, err := t.tdtDecode(encoderOut, encoderDim, actualEncodedLen)
-	if err != nil {
-		return nil, fmt.Errorf("decoding failed: %w", err)
-	}
-
-	return tokens, nil
+	// Decoder tensors (encoderOut) must remain alive during tdtDecode.
+	// The defers above fire after tdtDecode returns, so this is safe.
+	return t.tdtDecode(encoderOut, actualEncodedLen)
 }
 
-func (t *Transcriber) tdtDecode(encoderOut []float32, encoderDim, encodedLen int64) ([]int, error) {
-	decoderPath := filepath.Join(t.modelsDir, "decoder_joint-model.int8.onnx")
-	if _, err := os.Stat(decoderPath); os.IsNotExist(err) {
-		decoderPath = filepath.Join(t.modelsDir, "decoder_joint-model.onnx")
-	}
+func (t *Transcriber) tdtDecode(encoderOut []float32, encodedLen int64) ([]int, error) {
+	// Acquire a pre-initialized worker. Blocks if all workers are busy.
+	w := <-t.decoderPool
+	defer func() { t.decoderPool <- w }()
 
 	if DebugMode {
-		log.Printf("[DEBUG] TDT decode: encoderOut len=%d, encoderDim=%d, encodedLen=%d", len(encoderOut), encoderDim, encodedLen)
+		slog.Debug("TDT decode started", "encoderOutLen", len(encoderOut), "encodedLen", encodedLen)
 	}
 
-	// Decoder state dimensions (from model inspection)
-	stateDim := int64(640)
-	numLayers := int64(2)
+	// Reset LSTM states to zero for this request
+	s1 := w.state1In.GetData()
+	s2 := w.state2In.GetData()
+	for i := range s1 {
+		s1[i] = 0
+	}
+	for i := range s2 {
+		s2[i] = 0
+	}
 
 	var tokens []int
 	timestep := int64(0)
 	emittedTokens := 0
 	prevToken := t.blankIdx
 
-	// Initialize states
-	state1 := make([]float32, numLayers*1*stateDim)
-	state2 := make([]float32, numLayers*1*stateDim)
+	encOutData := w.encOut.GetData()
 
 	for timestep < encodedLen {
-		// Extract encoder output at current timestep
-		// Shape: [1, encoder_dim, 1]
-		encOutSlice := make([]float32, encoderDim)
+		// Write encoder frame into the reusable encOut tensor
 		for d := int64(0); d < encoderDim; d++ {
 			idx := d*encodedLen + timestep
 			if idx < int64(len(encoderOut)) {
-				encOutSlice[d] = encoderOut[idx]
+				encOutData[d] = encoderOut[idx]
+			} else {
+				encOutData[d] = 0
 			}
 		}
 
-		// Create decoder input tensors
-		encOutTensor, err := ort.NewTensor(ort.NewShape(1, encoderDim, 1), encOutSlice)
-		if err != nil {
-			return nil, err
-		}
+		// Update target token (written directly into tensor backing data)
+		w.targets.GetData()[0] = int32(prevToken)
 
-		targetsTensor, err := ort.NewTensor(ort.NewShape(1, 1), []int32{int32(prevToken)})
-		if err != nil {
-			encOutTensor.Destroy()
-			return nil, err
-		}
-
-		targetLenTensor, err := ort.NewTensor(ort.NewShape(1), []int32{1})
-		if err != nil {
-			encOutTensor.Destroy()
-			targetsTensor.Destroy()
-			return nil, err
-		}
-
-		state1Tensor, err := ort.NewTensor(ort.NewShape(numLayers, 1, stateDim), state1)
-		if err != nil {
-			encOutTensor.Destroy()
-			targetsTensor.Destroy()
-			targetLenTensor.Destroy()
-			return nil, err
-		}
-
-		state2Tensor, err := ort.NewTensor(ort.NewShape(numLayers, 1, stateDim), state2)
-		if err != nil {
-			encOutTensor.Destroy()
-			targetsTensor.Destroy()
-			targetLenTensor.Destroy()
-			state1Tensor.Destroy()
-			return nil, err
-		}
-
-		// Output tensors
-		// TDT output includes vocab logits + duration logits
-		// Shape: [batch, target_len, 1, vocab_size + num_duration_classes]
-		// For Parakeet TDT: vocab_size=8193, num_duration_classes=5, total=8198
-		numDurationClasses := int64(5) // TDT uses 5 duration classes (0-4)
-		outputDim := int64(t.vocabSize) + numDurationClasses
-		outputTensor, err := ort.NewEmptyTensor[float32](ort.NewShape(1, 1, 1, outputDim))
-		if err != nil {
-			encOutTensor.Destroy()
-			targetsTensor.Destroy()
-			targetLenTensor.Destroy()
-			state1Tensor.Destroy()
-			state2Tensor.Destroy()
-			return nil, err
-		}
-
-		outState1Tensor, err := ort.NewEmptyTensor[float32](ort.NewShape(numLayers, 1, stateDim))
-		if err != nil {
-			encOutTensor.Destroy()
-			targetsTensor.Destroy()
-			targetLenTensor.Destroy()
-			state1Tensor.Destroy()
-			state2Tensor.Destroy()
-			outputTensor.Destroy()
-			return nil, err
-		}
-
-		outState2Tensor, err := ort.NewEmptyTensor[float32](ort.NewShape(numLayers, 1, stateDim))
-		if err != nil {
-			encOutTensor.Destroy()
-			targetsTensor.Destroy()
-			targetLenTensor.Destroy()
-			state1Tensor.Destroy()
-			state2Tensor.Destroy()
-			outputTensor.Destroy()
-			outState1Tensor.Destroy()
-			return nil, err
-		}
-
-		// Create decoder session
-		decoderSession, err := ort.NewAdvancedSession(
-			decoderPath,
-			[]string{"encoder_outputs", "targets", "target_length", "input_states_1", "input_states_2"},
-			[]string{"outputs", "output_states_1", "output_states_2"},
-			[]ort.ArbitraryTensor{encOutTensor, targetsTensor, targetLenTensor, state1Tensor, state2Tensor},
-			[]ort.ArbitraryTensor{outputTensor, outState1Tensor, outState2Tensor},
-			nil,
-		)
-		if err != nil {
-			encOutTensor.Destroy()
-			targetsTensor.Destroy()
-			targetLenTensor.Destroy()
-			state1Tensor.Destroy()
-			state2Tensor.Destroy()
-			outputTensor.Destroy()
-			outState1Tensor.Destroy()
-			outState2Tensor.Destroy()
-			return nil, fmt.Errorf("failed to create decoder session: %w", err)
-		}
-
-		if err := decoderSession.Run(); err != nil {
-			decoderSession.Destroy()
-			encOutTensor.Destroy()
-			targetsTensor.Destroy()
-			targetLenTensor.Destroy()
-			state1Tensor.Destroy()
-			state2Tensor.Destroy()
-			outputTensor.Destroy()
-			outState1Tensor.Destroy()
-			outState2Tensor.Destroy()
+		if err := w.session.Run(); err != nil {
 			return nil, fmt.Errorf("decoder run failed: %w", err)
 		}
 
-		// Get outputs
-		output := outputTensor.GetData()
-
-		// TDT: first vocabSize elements are token logits, rest are duration logits
+		output := w.output.GetData()
 		vocabLogits := output[:t.vocabSize]
 		durationLogits := output[t.vocabSize:]
 
-		// Find best token (greedy)
 		token := argmax(vocabLogits)
-
-		// Find best duration step
 		step := argmax(durationLogits)
 
 		if DebugMode && timestep < 5 {
-			log.Printf("[DEBUG] t=%d: token=%d (blank=%d), step=%d, maxLogit=%.3f", timestep, token, t.blankIdx, step, vocabLogits[token])
+			slog.Debug("decode step",
+				"timestep", timestep,
+				"token", token,
+				"blank", t.blankIdx,
+				"step", step,
+				"maxLogit", vocabLogits[token],
+			)
 		}
 
 		if token != t.blankIdx {
-			// Update states
-			copy(state1, outState1Tensor.GetData())
-			copy(state2, outState2Tensor.GetData())
+			// Update LSTM states for next step
+			copy(w.state1In.GetData(), w.state1Out.GetData())
+			copy(w.state2In.GetData(), w.state2Out.GetData())
 			tokens = append(tokens, token)
 			prevToken = token
 			emittedTokens++
 		}
 
-		// Advance timestep based on TDT duration prediction
 		if step > 0 {
 			timestep += int64(step)
 			emittedTokens = 0
@@ -477,17 +503,6 @@ func (t *Transcriber) tdtDecode(encoderOut []float32, encoderDim, encodedLen int
 			timestep++
 			emittedTokens = 0
 		}
-
-		// Cleanup
-		decoderSession.Destroy()
-		encOutTensor.Destroy()
-		targetsTensor.Destroy()
-		targetLenTensor.Destroy()
-		state1Tensor.Destroy()
-		state2Tensor.Destroy()
-		outputTensor.Destroy()
-		outState1Tensor.Destroy()
-		outState2Tensor.Destroy()
 	}
 
 	return tokens, nil
@@ -512,7 +527,6 @@ func (t *Transcriber) tokensToText(tokens []int) string {
 	var parts []string
 	for _, tok := range tokens {
 		if text, ok := t.vocab[tok]; ok {
-			// Skip special tokens
 			if strings.HasPrefix(text, "<") && strings.HasSuffix(text, ">") {
 				continue
 			}
@@ -520,15 +534,6 @@ func (t *Transcriber) tokensToText(tokens []int) string {
 		}
 	}
 	text := strings.Join(parts, "")
-
-	// Clean up spacing
-	re := regexp.MustCompile(`^\s+|\s+$|\s{2,}`)
-	text = re.ReplaceAllStringFunc(text, func(s string) string {
-		if strings.TrimSpace(s) == "" {
-			return " "
-		}
-		return s
-	})
-	text = strings.TrimSpace(text)
+	text = strings.TrimSpace(whitespaceRegex.ReplaceAllString(text, " "))
 	return text
 }

@@ -58,14 +58,14 @@ run: build ## Build and run the server
 		echo "Error: ONNX Runtime library not found. Run 'make deps-onnxruntime' to install it."; \
 		exit 1; \
 	fi
-	ONNXRUNTIME_LIB=$(ONNXRUNTIME_LIB) ./$(BINARY_NAME) --debug=true
+	ONNXRUNTIME_LIB=$(ONNXRUNTIME_LIB) ./$(BINARY_NAME) -log-level=debug
 
 run-dev: build ## Run with custom port for development
 	@if [ -z "$(ONNXRUNTIME_LIB)" ]; then \
 		echo "Error: ONNX Runtime library not found. Run 'make deps-onnxruntime' to install it."; \
 		exit 1; \
 	fi
-	ONNXRUNTIME_LIB=$(ONNXRUNTIME_LIB) ./$(BINARY_NAME) -port 5092 -models $(MODELS_DIR) -debug=true
+	ONNXRUNTIME_LIB=$(ONNXRUNTIME_LIB) ./$(BINARY_NAME) -port 5092 -models $(MODELS_DIR) -log-level=debug
 
 clean: ## Remove build artifacts
 	rm -rf $(BIN_DIR)

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -18,12 +19,14 @@ type Config struct {
 	ModelsDir string
 	LogLevel  string
 	LogFormat string
+	Workers   int
 }
 
 // Server represents the HTTP server for the ASR service
 type Server struct {
 	config      Config
 	transcriber *asr.Transcriber
+	httpServer  *http.Server
 	mux         *http.ServeMux
 	apiKey      string
 }
@@ -34,7 +37,7 @@ func New(cfg Config) (*Server, error) {
 	asr.DebugMode = cfg.LogLevel == "debug"
 
 	// Initialize transcriber
-	transcriber, err := asr.NewTranscriber(cfg.ModelsDir)
+	transcriber, err := asr.NewTranscriber(cfg.ModelsDir, cfg.Workers)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize transcriber: %w", err)
 	}
@@ -82,18 +85,38 @@ func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// Run starts the HTTP server
+// Run starts the HTTP server. It blocks until the server is shut down.
+// Returns nil if closed via Shutdown; returns the underlying error otherwise.
 func (s *Server) Run() error {
 	addr := fmt.Sprintf(":%d", s.config.Port)
+	s.httpServer = &http.Server{
+		Addr:    addr,
+		Handler: s.mux,
+	}
 	slog.Info("Parakeet ASR server started", "addr", addr)
 	slog.Info("endpoints registered",
 		"transcriptions", "POST /v1/audio/transcriptions",
 		"models", "GET /v1/models",
 	)
-	return http.ListenAndServe(addr, s.mux)
+	err := s.httpServer.ListenAndServe()
+	if err == http.ErrServerClosed {
+		return nil
+	}
+	return err
 }
 
-// Close releases server resources
+// Shutdown gracefully stops the HTTP server, waiting for in-flight requests
+// to complete before returning. After Shutdown returns, all request handlers
+// have finished and it is safe to call Close.
+func (s *Server) Shutdown(ctx context.Context) error {
+	if s.httpServer != nil {
+		slog.Info("shutting down HTTP server, waiting for in-flight requests...")
+		return s.httpServer.Shutdown(ctx)
+	}
+	return nil
+}
+
+// Close releases server resources. Must be called after Shutdown.
 func (s *Server) Close() error {
 	if s.transcriber != nil {
 		s.transcriber.Close()

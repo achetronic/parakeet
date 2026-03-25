@@ -113,11 +113,28 @@ Architectural and design decisions made in this project.
 - Returns OpenAI-compatible 401 error (`authentication_error`) on invalid/missing key
 - Zero overhead when no key is configured (passthrough)
 
+## DD-011: Decoder Session Pool for Concurrent Inference
+
+**Context**: The original implementation created and destroyed an ONNX decoder session inside the TDT decode loop, once per timestep. For a 10-second audio clip with ~150 encoded timesteps, this meant ~150 model loads per request.
+
+**Decision**: Pre-create a pool of `decoderWorker` structs at startup (controlled by `-workers N`). Each worker owns a persistent `ort.AdvancedSession` with pre-allocated, reusable input/output tensors. The decode loop writes directly into the tensor backing data (via `GetData()`) and calls `Run()` without allocating anything.
+
+**Rationale**: Eliminates ~150 session creations per request (the dominant bottleneck). The pool also provides natural backpressure: if all workers are busy, new requests block instead of spawning unconstrained concurrent inference.
+
+**Encoder**: Kept per-request because input shape varies with audio length (dynamic T dimension). The encoder runs once per request — not per timestep — so the overhead is acceptable. The model file is OS page-cached after first load.
+
+**Consequences**:
+- `-workers` flag added (default 4); each worker holds ~18MB for decoder + session overhead
+- Memory is predictable: `workers × ~670MB` (int8) instead of unbounded concurrent loads
+- Throughput: up to `workers` requests processed in parallel
+- `decoderWorker.destroy()` called on shutdown to free ORT sessions before `DestroyEnvironment()`
+- Graceful shutdown via `http.Server.Shutdown()` ensures all in-flight requests complete before pool is closed
+
 ## DD-010: Structured Logging with slog
 
 **Context**: The project used `log.Printf` with ad-hoc `[DEBUG]` prefixes for logging.
 
-**Decision**: Migrate to `log/slog` (stdlib since Go 1.21) with configurable output format (`text` or `json`) via `-log-format` flag and log level controlled by `-debug`.
+**Decision**: Migrate to `log/slog` (stdlib since Go 1.21) with configurable output format (`text` or `json`) via `-log-format` flag and log level controlled by `-log-level`.
 
 **Rationale**: `slog` is stdlib (no new dependencies), provides structured key-value logging, native log levels, and switchable handlers. JSON output is essential for log aggregation in production (ELK, Loki, CloudWatch). Text output stays human-readable for development.
 

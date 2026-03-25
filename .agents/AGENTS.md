@@ -22,7 +22,7 @@ make build                  # Build to ./bin/parakeet
 make run                    # Build and run with debug mode
 make run-dev                # Run with custom port (5092) for development
 ./bin/parakeet              # Run binary directly
-./bin/parakeet -port 8080 -models /path/to/models -log-level=debug -log-format=json
+./bin/parakeet -port 8080 -models /path/to/models -log-level=debug -log-format=json -workers=2
 
 # Download models
 make models                 # Download int8 models (default, ~670MB)
@@ -88,19 +88,22 @@ parakeet/
 ## Code Organization
 
 ### `main.go` (Entry Point)
-- Parses CLI flags: `-port`, `-models`, `-log-level`, `-log-format`
+- Parses CLI flags: `-port`, `-models`, `-log-level`, `-log-format`, `-workers`
 - Configures `slog` global logger (text or JSON handler, four log levels)
-- Creates and runs the server
-- Default port: 5092, default models dir: `./models`, default log level: `info`, default log format: `text`
+- Runs server in background goroutine, listens for SIGINT/SIGTERM
+- Graceful shutdown: waits up to 30s for in-flight requests via `http.Server.Shutdown`
+- Calls `srv.Close()` after shutdown to release ONNX resources
+- Default port: 5092, default models dir: `./models`, default log level: `info`, default log format: `text`, default workers: `4`
 
 ### `internal/server/` (HTTP Server Package)
 
 #### `server.go`
-- `Config` struct: Port, ModelsDir, Debug settings
-- `Server` struct: wraps config, transcriber, HTTP mux, and API key
-- `New()` - Initializes transcriber, reads `PARAKEET_API_KEY` env var, and sets up routes
-- `Run()` - Starts HTTP listener
-- `Close()` - Releases resources
+- `Config` struct: Port, ModelsDir, LogLevel, LogFormat, Workers settings
+- `Server` struct: wraps config, transcriber, `http.Server`, HTTP mux, and API key
+- `New()` - Initializes transcriber with worker pool, reads `PARAKEET_API_KEY` env var, and sets up routes
+- `Run()` - Starts HTTP listener (blocks until shutdown or error)
+- `Shutdown(ctx)` - Graceful HTTP shutdown, waits for in-flight requests to finish
+- `Close()` - Releases transcriber and ONNX resources (must be called after Shutdown)
 - `requireAuth()` - Middleware that validates `Authorization: Bearer <key>` on `/v1/*` routes
 
 #### `handlers.go`
@@ -123,12 +126,13 @@ parakeet/
 #### `transcriber.go`
 - `DebugMode` - Global flag for verbose logging
 - `Config` - Model configuration (features_size, subsampling_factor)
-- `Transcriber` - Main inference struct
-- `NewTranscriber()` - Loads config, vocab, initializes ONNX Runtime
+- `decoderWorker` - Holds a persistent decoder ONNX session with pre-allocated reusable tensors
+- `Transcriber` - Main inference struct with a pool of `decoderWorker`s
+- `NewTranscriber(modelsDir, workers)` - Loads config, vocab, initializes ONNX Runtime, creates decoder pool
 - `Transcribe()` - Main entry: audio -> mel -> encoder -> TDT decode -> text
 - `loadAudio()` - Format detection and parsing
-- `runInference()` - Encoder ONNX session execution
-- `tdtDecode()` - TDT greedy decoding loop with state management
+- `runInference()` - Encoder ONNX session (per-request, variable shape), then acquires pool worker for decode
+- `tdtDecode()` - TDT greedy decoding loop reusing pooled session and tensors
 - `tokensToText()` - Token IDs to text with cleanup
 
 #### `mel.go`

@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log/slog"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
+	"time"
 
 	"parakeet/internal/server"
 )
@@ -16,6 +20,7 @@ func main() {
 	flag.StringVar(&cfg.ModelsDir, "models", "./models", "Models directory")
 	flag.StringVar(&cfg.LogLevel, "log-level", "info", "Log level: debug, info, warn, error")
 	flag.StringVar(&cfg.LogFormat, "log-format", "text", "Log format: text or json")
+	flag.IntVar(&cfg.Workers, "workers", 4, "Number of concurrent inference workers (each uses ~670MB RAM for int8 models)")
 	flag.Parse()
 
 	setupLogger(cfg.LogFormat, cfg.LogLevel)
@@ -25,12 +30,38 @@ func main() {
 		slog.Error("failed to create server", "error", err)
 		os.Exit(1)
 	}
-	defer srv.Close()
 
-	if err := srv.Run(); err != nil {
-		slog.Error("server error", "error", err)
-		os.Exit(1)
+	// Run server in background
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- srv.Run()
+	}()
+
+	// Wait for shutdown signal or server error
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+
+	select {
+	case sig := <-quit:
+		slog.Info("received signal, shutting down", "signal", sig)
+	case err := <-errCh:
+		if err != nil {
+			slog.Error("server error", "error", err)
+			srv.Close()
+			os.Exit(1)
+		}
 	}
+
+	// Graceful shutdown: wait up to 30s for in-flight requests to finish
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(ctx); err != nil {
+		slog.Error("shutdown error", "error", err)
+	}
+
+	srv.Close()
+	slog.Info("server stopped")
 }
 
 func setupLogger(format, level string) {

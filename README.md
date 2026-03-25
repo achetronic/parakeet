@@ -243,6 +243,7 @@ services:
       - ./models:/models
     environment:
       - PARAKEET_API_KEY=your-secret-key  # optional
+    command: ["-workers", "2"]  # tune to available RAM
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5092/health"]
@@ -261,6 +262,7 @@ services:
 | `-models` | Path to models directory | `./models` | `-models /opt/parakeet/models` |
 | `-log-level` | Log level: debug, info, warn, error | `info` | `-log-level debug` |
 | `-log-format` | Log output format: text or json | `text` | `-log-format json` |
+| `-workers` | Concurrent inference workers (each ~670MB RAM for int8) | `4` | `-workers 2` |
 
 **Examples:**
 

@@ -8,12 +8,13 @@ import (
 
 // MelFilterbank computes mel-scale filterbank features
 type MelFilterbank struct {
-	nMels      int
-	sampleRate int
-	nFFT       int
-	hopLength  int
-	winLength  int
-	filterbank [][]float64
+	nMels       int
+	sampleRate  int
+	nFFT        int
+	hopLength   int
+	winLength   int
+	filterbank  [][]float64
+	hannWindow  []float64
 }
 
 // NewMelFilterbank creates a new mel filterbank extractor
@@ -27,7 +28,16 @@ func NewMelFilterbank(nMels, sampleRate int) *MelFilterbank {
 		winLength:  400, // 25ms at 16kHz
 	}
 	m.filterbank = m.createMelFilterbank()
+	m.hannWindow = m.createHannWindow()
 	return m
+}
+
+func (m *MelFilterbank) createHannWindow() []float64 {
+	win := make([]float64, m.winLength)
+	for i := 0; i < m.winLength; i++ {
+		win[i] = 0.5 * (1.0 - math.Cos(2.0*math.Pi*float64(i)/float64(m.winLength-1)))
+	}
+	return win
 }
 
 func (m *MelFilterbank) hzToMel(hz float64) float64 {
@@ -91,12 +101,10 @@ func (m *MelFilterbank) Extract(samples []float32) [][]float32 {
 			end = len(samples)
 		}
 
-		// Extract frame and apply Hann window
+		// Extract frame and apply pre-computed Hann window
 		windowed := make([]float64, m.nFFT)
 		for i := 0; i < end-start && i < m.winLength; i++ {
-			// Hann window
-			w := 0.5 * (1.0 - math.Cos(2.0*math.Pi*float64(i)/float64(m.winLength-1)))
-			windowed[i] = float64(samples[start+i]) * w
+			windowed[i] = float64(samples[start+i]) * m.hannWindow[i]
 		}
 
 		// FFT
