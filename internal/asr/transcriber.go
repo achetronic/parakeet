@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -349,11 +350,41 @@ func (t *Transcriber) loadAudio(data []byte, format string) ([]float32, error) {
 	switch format {
 	case ".wav":
 		return parseWAV(data)
-	case ".webm", ".ogg", ".mp3", ".m4a":
-		return nil, fmt.Errorf("format %s requires ffmpeg conversion - not yet implemented", format)
+	case ".webm", ".ogg", ".mp3", ".m4a", ".flac", ".aac", ".wma", ".opus":
+		return convertWithFFmpeg(data, format)
 	default:
-		return parseWAV(data)
+		samples, err := parseWAV(data)
+		if err == nil {
+			return samples, nil
+		}
+		return convertWithFFmpeg(data, format)
 	}
+}
+
+func convertWithFFmpeg(data []byte, format string) ([]float32, error) {
+	tempDir := os.TempDir()
+	inputPath := filepath.Join(tempDir, fmt.Sprintf("parakeet_%d%s", os.Getpid(), format))
+	outputPath := filepath.Join(tempDir, fmt.Sprintf("parakeet_%d.wav", os.Getpid()))
+
+	if err := os.WriteFile(inputPath, data, 0600); err != nil {
+		return nil, fmt.Errorf("write temp input: %w", err)
+	}
+	defer os.Remove(inputPath)
+	defer os.Remove(outputPath)
+
+	cmd := exec.Command("ffmpeg", "-y", "-i", inputPath,
+		"-ac", "1", "-ar", "16000", "-acodec", "pcm_s16le", outputPath)
+
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("ffmpeg: %w", err)
+	}
+
+	wavData, err := os.ReadFile(outputPath)
+	if err != nil {
+		return nil, fmt.Errorf("read converted: %w", err)
+	}
+
+	return parseWAV(wavData)
 }
 
 func (t *Transcriber) runInference(features [][]float32) ([]int, error) {

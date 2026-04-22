@@ -35,12 +35,13 @@ FROM debian:bookworm-slim
 # Model precision: "int8" (default, ~670MB) or "fp32" (~2.5GB)
 ARG MODEL_PRECISION=int8
 
-# Install ONNX Runtime
+# Install ONNX Runtime and ffmpeg for audio conversion
 ARG ONNXRUNTIME_VERSION=1.21.0
 ARG TARGETARCH
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
+    ffmpeg \
     && ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "aarch64" || echo "x64") \
     && curl -L -o /tmp/onnxruntime.tgz \
     "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-${ARCH}-${ONNXRUNTIME_VERSION}.tgz" \

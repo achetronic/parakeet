@@ -42,6 +42,7 @@ Key features:
 - Support for multiple response formats (JSON, text, SRT, VTT)
 - Multilingual support (English and 25+ languages)
 - Quantized model support for reduced memory footprint
+- Multiple audio formats supported (WAV, OGG, MP3, WebM, FLAC, and more via ffmpeg)
 
 ## Model Architecture
 
@@ -332,7 +333,7 @@ Content-Type: `multipart/form-data`
 
 | Parameter         | Type   | Required | Description                                       |
 |-------------------|--------|----------|---------------------------------------------------|
-| `file`            | file   | Yes      | Audio file (WAV format, max 25MB)                 |
+| `file`            | file   | Yes      | Audio file (WAV, OGG, MP3, WebM, FLAC, etc., max 25MB) |
 | `model`           | string | No       | Model name (accepted but ignored)                 |
 | `language`        | string | No       | ISO-639-1 language code (default: en)             |
 | `response_format` | string | No       | Output format: json, text, srt, vtt, verbose_json |
@@ -490,13 +491,15 @@ make models
 
 Use the int8 quantized models (default) instead of fp32. The int8 models require approximately 2GB of RAM versus 6GB for fp32.
 
-### Unsupported audio format
+### Audio Format Support
 
-Currently only WAV format is supported. Convert other formats using ffmpeg:
+The server supports multiple audio formats:
+- **Direct support**: WAV (recommended)
+- **Via ffmpeg conversion**: OGG, MP3, WebM, M4A, FLAC, AAC, Opus
 
-```bash
-ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
-```
+All formats tested and working: WAV, MP3, OGG, FLAC, M4A, WebM, AAC, Opus.
+
+Audio is automatically converted to 16kHz mono WAV before processing. No manual conversion needed.
 
 ## License
 
