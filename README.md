@@ -219,7 +219,7 @@ make models
 docker run -d \
   --name parakeet \
   -p 5092:5092 \
-  -v $(pwd)/models:/models \
+  -v $(pwd)/models:/app/models \
   ghcr.io/achetronic/parakeet:latest
 ```
 
@@ -240,10 +240,10 @@ services:
     ports:
       - "5092:5092"
     volumes:
-      - ./models:/models
+      - ./models:/app/models
     environment:
       - PARAKEET_API_KEY=your-secret-key  # optional
-    command: ["-workers", "2"]  # tune to available RAM
+    command: ["-models", "/app/models", "-workers", "2"]  # tune to available RAM
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5092/health"]
