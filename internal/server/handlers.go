@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -122,6 +123,13 @@ func (s *Server) handleTranscription(w http.ResponseWriter, r *http.Request) {
 	// Transcribe
 	text, err := s.transcriber.Transcribe(audioData, ext, language)
 	if err != nil {
+		// Unsupported or malformed audio is a client error: the request
+		// body we received cannot be decoded. Everything else is treated
+		// as an internal failure.
+		if errors.Is(err, asr.ErrUnsupportedAudio) {
+			sendError(w, "Unsupported or malformed audio: "+err.Error(), "invalid_request_error", http.StatusBadRequest)
+			return
+		}
 		sendError(w, "Transcription failed: "+err.Error(), "server_error", http.StatusInternalServerError)
 		return
 	}

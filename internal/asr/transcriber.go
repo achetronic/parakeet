@@ -157,12 +157,24 @@ type Transcriber struct {
 	mel              *MelFilterbank
 	encoderPath      string
 	decoderPool      chan *decoderWorker
+	ffmpeg           *ffmpegConverter
 }
 
-func NewTranscriber(modelsDir string, workers int) (*Transcriber, error) {
+// Options groups optional knobs passed to NewTranscriber. Zero values keep
+// the previous behavior: WAV-only input, no ffmpeg conversion.
+type Options struct {
+	FFmpeg FFmpegConfig
+}
+
+// NewTranscriber loads models and initializes the decoder worker pool.
+// When opts.FFmpeg.Enabled is true and the ffmpeg binary is resolvable,
+// non-WAV inputs will be transcoded on the fly. Otherwise, only WAV is
+// accepted and non-WAV inputs return ErrUnsupportedAudio.
+func NewTranscriber(modelsDir string, workers int, opts Options) (*Transcriber, error) {
 	t := &Transcriber{
 		maxTokensPerStep: 10,
 		blankIdx:         8192,
+		ffmpeg:           newFFmpegConverter(opts.FFmpeg),
 	}
 
 	// Load config
@@ -345,15 +357,39 @@ func (t *Transcriber) Transcribe(audioData []byte, format, language string) (str
 	return t.tokensToText(tokens), nil
 }
 
+// loadAudio decodes raw request bytes into mono 16 kHz float32 samples.
+//
+// Detection is done by content, not by filename extension: an OpenAI client
+// is free to upload a file without an extension or with a misleading one,
+// and the transcription endpoint only ever sees bytes. WAV inputs are
+// parsed in-process with zero external dependencies. Anything else is
+// delegated to the optional ffmpeg converter; when ffmpeg is unavailable
+// the call fails with ErrUnsupportedAudio so the HTTP layer can surface a
+// 400 response instead of a generic 500.
+//
+// The `format` parameter is kept for logging and future heuristics, but it
+// is intentionally not used to pick the decoder.
 func (t *Transcriber) loadAudio(data []byte, format string) ([]float32, error) {
-	switch format {
-	case ".wav":
-		return parseWAV(data)
-	case ".webm", ".ogg", ".mp3", ".m4a":
-		return nil, fmt.Errorf("format %s requires ffmpeg conversion - not yet implemented", format)
-	default:
+	if isWAV(data) {
 		return parseWAV(data)
 	}
+
+	if t.ffmpeg == nil {
+		return nil, fmt.Errorf("input is not WAV and ffmpeg conversion is disabled: %w", ErrUnsupportedAudio)
+	}
+
+	if DebugMode {
+		slog.Debug("converting audio via ffmpeg",
+			"format", format,
+			"bytes", len(data),
+		)
+	}
+
+	wavData, err := t.ffmpeg.Convert(data)
+	if err != nil {
+		return nil, err
+	}
+	return parseWAV(wavData)
 }
 
 func (t *Transcriber) runInference(features [][]float32) ([]int, error) {

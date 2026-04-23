@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"parakeet/internal/asr"
 )
@@ -20,6 +21,18 @@ type Config struct {
 	LogLevel  string
 	LogFormat string
 	Workers   int
+
+	// FFmpegEnabled toggles the ffmpeg-backed fallback for non-WAV audio.
+	// When true, unknown input formats are transcoded to 16 kHz mono WAV
+	// before transcription. When false, only WAV input is accepted.
+	FFmpegEnabled bool
+
+	// FFmpegPath is the name or absolute path of the ffmpeg binary.
+	// Empty means "ffmpeg", resolved against PATH.
+	FFmpegPath string
+
+	// FFmpegTimeout bounds the duration of a single conversion.
+	FFmpegTimeout time.Duration
 }
 
 // Server represents the HTTP server for the ASR service
@@ -37,7 +50,13 @@ func New(cfg Config) (*Server, error) {
 	asr.DebugMode = cfg.LogLevel == "debug"
 
 	// Initialize transcriber
-	transcriber, err := asr.NewTranscriber(cfg.ModelsDir, cfg.Workers)
+	transcriber, err := asr.NewTranscriber(cfg.ModelsDir, cfg.Workers, asr.Options{
+		FFmpeg: asr.FFmpegConfig{
+			Enabled:    cfg.FFmpegEnabled,
+			BinaryPath: cfg.FFmpegPath,
+			Timeout:    cfg.FFmpegTimeout,
+		},
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize transcriber: %w", err)
 	}

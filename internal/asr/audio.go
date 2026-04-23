@@ -7,6 +7,16 @@ import (
 	"math"
 )
 
+// isWAV returns true when data starts with a RIFF/WAVE header. It inspects
+// the first 12 bytes, which is enough to distinguish a WAV container from
+// any other audio format without parsing it.
+func isWAV(data []byte) bool {
+	if len(data) < 12 {
+		return false
+	}
+	return string(data[0:4]) == "RIFF" && string(data[8:12]) == "WAVE"
+}
+
 // parseWAV parses a WAV file and returns float32 samples normalized to [-1, 1]
 func parseWAV(data []byte) ([]float32, error) {
 	if len(data) < 44 {

@@ -7,6 +7,7 @@ This document helps AI agents work effectively in this codebase.
 **Parakeet ASR Server** - A Go-based automatic speech recognition (ASR) server using NVIDIA's Parakeet TDT 0.6B model in ONNX format. Provides an OpenAI Whisper-compatible API for audio transcription.
 
 ### Key Technologies
+
 - **Language**: Go 1.25+
 - **ML Runtime**: ONNX Runtime 1.21.x (CPU inference)
 - **Model**: NVIDIA Parakeet TDT 0.6B (Conformer-based encoder with Token-and-Duration Transducer decoder)
@@ -65,7 +66,9 @@ parakeet/
 │   ├── asr/
 │   │   ├── transcriber.go  # ONNX inference pipeline, TDT decoding
 │   │   ├── mel.go          # Mel filterbank feature extraction (FFT, windowing)
-│   │   └── audio.go        # WAV parsing, resampling to 16kHz
+│   │   ├── audio.go        # WAV parsing, magic-byte detection, resampling to 16kHz
+│   │   ├── ffmpeg.go       # Optional ffmpeg-backed converter for non-WAV inputs
+│   │   └── audio_test.go   # Unit + concurrency tests for audio/ffmpeg logic
 │   └── server/
 │       ├── server.go       # HTTP server, route setup, lifecycle management
 │       ├── handlers.go     # API endpoint handlers, response formatting
@@ -88,26 +91,29 @@ parakeet/
 ## Code Organization
 
 ### `main.go` (Entry Point)
-- Parses CLI flags: `-port`, `-models`, `-log-level`, `-log-format`, `-workers`
+
+- Parses CLI flags: `-port`, `-models`, `-log-level`, `-log-format`, `-workers`, `-ffmpeg`, `-ffmpeg-path`, `-ffmpeg-timeout`
 - Configures `slog` global logger (text or JSON handler, four log levels)
 - Runs server in background goroutine, listens for SIGINT/SIGTERM
 - Graceful shutdown: waits up to 30s for in-flight requests via `http.Server.Shutdown`
 - Calls `srv.Close()` after shutdown to release ONNX resources
-- Default port: 5092, default models dir: `./models`, default log level: `info`, default log format: `text`, default workers: `4`
+- Default port: 5092, default models dir: `./models`, default log level: `info`, default log format: `text`, default workers: `4`, ffmpeg fallback enabled by default, ffmpeg timeout: `60s`
 
 ### `internal/server/` (HTTP Server Package)
 
 #### `server.go`
-- `Config` struct: Port, ModelsDir, LogLevel, LogFormat, Workers settings
+
+- `Config` struct: Port, ModelsDir, LogLevel, LogFormat, Workers, FFmpegEnabled, FFmpegPath, FFmpegTimeout
 - `Server` struct: wraps config, transcriber, `http.Server`, HTTP mux, and API key
-- `New()` - Initializes transcriber with worker pool, reads `PARAKEET_API_KEY` env var, and sets up routes
+- `New()` - Initializes transcriber with worker pool and optional ffmpeg converter, reads `PARAKEET_API_KEY` env var, and sets up routes
 - `Run()` - Starts HTTP listener (blocks until shutdown or error)
 - `Shutdown(ctx)` - Graceful HTTP shutdown, waits for in-flight requests to finish
 - `Close()` - Releases transcriber and ONNX resources (must be called after Shutdown)
 - `requireAuth()` - Middleware that validates `Authorization: Bearer <key>` on `/v1/*` routes
 
 #### `handlers.go`
-- `handleTranscription()` - Main endpoint, parses multipart form, returns transcription
+
+- `handleTranscription()` - Main endpoint, parses multipart form, returns transcription. Maps `asr.ErrUnsupportedAudio` to HTTP 400 `invalid_request_error`; other errors fall back to HTTP 500 `server_error`.
 - `handleTranslation()` - Delegates to transcription (Parakeet is English-focused)
 - `handleModels()` - Returns available models (parakeet-tdt-0.6b, whisper-1 alias)
 - `handleHealth()` - Health check endpoint
@@ -115,6 +121,7 @@ parakeet/
 - CORS and error response utilities
 
 #### `types.go`
+
 - `TranscriptionResponse` - Simple JSON response with text
 - `VerboseTranscriptionResponse` - Detailed response with segments, timing
 - `Segment` - Transcription segment with timing info
@@ -124,18 +131,29 @@ parakeet/
 ### `internal/asr/` (ASR Package)
 
 #### `transcriber.go`
+
 - `DebugMode` - Global flag for verbose logging
 - `Config` - Model configuration (features_size, subsampling_factor)
+- `Options` - Optional knobs passed to `NewTranscriber` (currently wraps `FFmpegConfig`)
+- `ErrUnsupportedAudio` - Sentinel error returned when input is neither WAV nor convertible. Used by the HTTP layer to map to 400.
 - `decoderWorker` - Holds a persistent decoder ONNX session with pre-allocated reusable tensors
-- `Transcriber` - Main inference struct with a pool of `decoderWorker`s
-- `NewTranscriber(modelsDir, workers)` - Loads config, vocab, initializes ONNX Runtime, creates decoder pool
+- `Transcriber` - Main inference struct with a pool of `decoderWorker`s and optional `ffmpegConverter`
+- `NewTranscriber(modelsDir, workers, opts)` - Loads config, vocab, initializes ONNX Runtime, creates decoder pool and (optionally) probes ffmpeg
 - `Transcribe()` - Main entry: audio -> mel -> encoder -> TDT decode -> text
-- `loadAudio()` - Format detection and parsing
+- `loadAudio()` - Detects WAV by magic bytes (RIFF/WAVE); falls back to ffmpeg conversion when available, otherwise returns `ErrUnsupportedAudio`
 - `runInference()` - Encoder ONNX session (per-request, variable shape), then acquires pool worker for decode
 - `tdtDecode()` - TDT greedy decoding loop reusing pooled session and tensors
 - `tokensToText()` - Token IDs to text with cleanup
 
+#### `ffmpeg.go`
+
+- `FFmpegConfig` - Public struct with `Enabled`, `BinaryPath`, `Timeout`
+- `ffmpegConverter` - Encapsulates an ffmpeg binary path and a conversion timeout; safe for concurrent use
+- `newFFmpegConverter()` - Probes the binary once with `exec.LookPath`; returns `nil` (logging a warning) when ffmpeg is disabled or missing
+- `Convert()` - Writes input to `os.CreateTemp` (unique path per call), runs `ffmpeg` via `exec.CommandContext` with captured stderr, reads the resulting WAV. Wraps non-zero exits and timeouts in `ErrUnsupportedAudio`.
+
 #### `mel.go`
+
 - `MelFilterbank` - Mel-scale filterbank feature extractor
 - `NewMelFilterbank()` - Creates filterbank with NeMo defaults (128 mels, 512 FFT)
 - `Extract()` - Computes mel features with Hann windowing
@@ -144,20 +162,23 @@ parakeet/
 - Mel/Hz conversion helpers
 
 #### `audio.go`
+
+- `isWAV()` - Magic-byte check (RIFF/WAVE) used for content-based format detection
 - `parseWAV()` - WAV parser supporting multiple chunk layouts
 - `convertToFloat32()` - Supports 8/16/24/32-bit PCM and 32-bit float
 - `resample()` - Linear interpolation resampling to 16kHz
 
 ## API Endpoints
 
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/v1/audio/transcriptions` | Transcribe audio (OpenAI-compatible) |
-| POST | `/v1/audio/translations` | Translate audio (delegates to transcription) |
-| GET | `/v1/models` | List available models |
-| GET | `/health` | Health check |
+| Method | Path                       | Description                                  |
+| ------ | -------------------------- | -------------------------------------------- |
+| POST   | `/v1/audio/transcriptions` | Transcribe audio (OpenAI-compatible)         |
+| POST   | `/v1/audio/translations`   | Translate audio (delegates to transcription) |
+| GET    | `/v1/models`               | List available models                        |
+| GET    | `/health`                  | Health check                                 |
 
 ### Transcription Parameters
+
 - `file` (required) - Audio file (multipart form, max 25MB)
 - `model` - Accepted but ignored (only one model)
 - `language` - ISO-639-1 code (default: "en")
@@ -167,35 +188,40 @@ parakeet/
 ## Code Patterns & Conventions
 
 ### Naming
+
 - Go standard naming (camelCase for private, PascalCase for exported)
 - Descriptive function names: `parseWAV`, `convertToFloat32`, `tdtDecode`
 - Type suffixes for ONNX tensors: `inputTensor`, `outputTensor`, `lengthTensor`
 
 ### Error Handling
+
 - Wrap errors with `fmt.Errorf("context: %w", err)`
 - Return early on error
 - Cleanup resources with `defer` (tensor.Destroy(), file.Close())
 
 ### ONNX Runtime Usage
+
 - Create tensors with `ort.NewTensor(shape, data)`
 - Use `ort.NewAdvancedSession()` for named inputs/outputs
 - Always call `.Destroy()` on tensors and sessions after use
 - Memory-conscious: tensors created and destroyed per inference step in decode loop
 
 ### Response Formats
+
 - JSON structs use tags: `json:"field_name"` with `omitempty` where appropriate
 - OpenAI-compatible response structures
 
 ## Environment Variables
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `ONNXRUNTIME_LIB` | Path to libonnxruntime.so | Auto-detect |
+| Variable           | Description                                 | Default               |
+| ------------------ | ------------------------------------------- | --------------------- |
+| `ONNXRUNTIME_LIB`  | Path to libonnxruntime.so                   | Auto-detect           |
 | `PARAKEET_API_KEY` | API key for `/v1/*` endpoint authentication | Empty (auth disabled) |
 
 ## Dependencies
 
 From `go.mod`:
+
 ```
 go 1.25.5
 github.com/yalue/onnxruntime_go v1.19.0
@@ -206,17 +232,20 @@ No other external Go dependencies. Standard library used for HTTP, JSON, audio p
 ## CI/CD
 
 ### CI Pipeline (`.github/workflows/ci.yaml`)
+
 - Runs on push/PR to main/master
 - Jobs: lint (Go 1.22), test (Go 1.25), build (Go 1.25)
 - Lint checks: go vet, gofmt
 
 ### Release Pipeline (`.github/workflows/release.yaml`)
-- Triggers on version tags (v*)
+
+- Triggers on version tags (v\*)
 - Builds binaries for linux/darwin/windows (amd64/arm64)
 - Creates GitHub release with checksums
 - Pushes Docker images to ghcr.io (int8 and fp32 variants)
 
 ### Docker Build
+
 - Multi-stage build with golang:1.25-bookworm builder
 - Runtime: debian:bookworm-slim with ONNX Runtime 1.21.0
 - Models embedded in image during build
@@ -226,32 +255,40 @@ No other external Go dependencies. Standard library used for HTTP, JSON, audio p
 ## Common Tasks for Agents
 
 ### Adding a New Audio Format
-1. Add case in `internal/asr/transcriber.go:loadAudio()`
-2. Implement parser in `internal/asr/audio.go`
-3. Ensure output is `[]float32` normalized to [-1, 1] at 16kHz
+
+- If ffmpeg supports it (most common cases), no code change is needed: `loadAudio` automatically delegates any non-WAV input to the `ffmpegConverter`. Install `ffmpeg` on the target system and keep `-ffmpeg=true` (default).
+- To add a first-class (no-ffmpeg) parser:
+  1. Extend `isWAV`-style detection in `internal/asr/audio.go` with a new magic-byte helper.
+  2. Implement a parser returning `[]float32` normalized to `[-1, 1]` at 16kHz mono.
+  3. Plug it into `Transcriber.loadAudio` before the ffmpeg fallback.
 
 ### Modifying API Response
+
 1. Add/modify structs in `internal/server/types.go`
 2. Update relevant handler in `internal/server/handlers.go`
 3. Follow OpenAI response format conventions
 
 ### Adding a New Endpoint
+
 1. Add handler method to `internal/server/handlers.go`
 2. Register route in `internal/server/server.go:setupRoutes()` — wrap with `s.requireAuth()` for authenticated endpoints
 3. Add types to `internal/server/types.go` if needed
 
 ### Changing Inference Parameters
+
 - Encoder dim: `internal/asr/transcriber.go:247` (`encoderDim := int64(1024)`)
 - LSTM state: `internal/asr/transcriber.go:314-315` (`stateDim`, `numLayers`)
 - Max tokens per step: `internal/asr/transcriber.go:39` (`maxTokensPerStep: 10`)
 - Mel features: `internal/asr/mel.go:25-27` (nFFT, hopLength, winLength)
 
 ### Adding a New Makefile Target
+
 1. Add target with `## Description` comment for help
 2. Use `@` prefix for silent commands
 3. Add to `.PHONY` if not a file target
 
 ### Creating a Release
+
 1. Tag with semver: `git tag v1.0.0`
 2. Push tag: `git push origin v1.0.0`
 3. Release pipeline builds and publishes automatically
@@ -259,6 +296,7 @@ No other external Go dependencies. Standard library used for HTTP, JSON, audio p
 ## Important Gotchas
 
 ### ONNX Runtime Library
+
 - Must be installed separately (not vendored)
 - Set `ONNXRUNTIME_LIB` env var if not in standard paths
 - Auto-detection checks common paths in Makefile and transcriber.go
@@ -266,12 +304,23 @@ No other external Go dependencies. Standard library used for HTTP, JSON, audio p
 - Compatible version: 1.21.x for onnxruntime_go v1.19.0
 
 ### Model Files Required
+
 - `encoder-model.int8.onnx` (~652MB) or `encoder-model.onnx` (~2.5GB)
 - `decoder_joint-model.int8.onnx` (~18MB) or `decoder_joint-model.onnx` (~72MB)
 - `config.json`, `vocab.txt`, `nemo128.onnx`
 - Download via `make models` or manually from HuggingFace
 
 ### Tensor Memory Management
+
 - Tensors must be destroyed manually (no GC)
 - The TDT decode loop creates/destroys tensors each iteration
 - Memory usage: ~2GB RAM for int8 models, ~6GB for fp32
+
+### ffmpeg Conversion
+
+- `ffmpeg` is an optional system dependency. When present (and `-ffmpeg=true`, the default), non-WAV inputs are transcoded to 16 kHz mono PCM WAV on the fly.
+- Detection is done by magic bytes on the uploaded bytes, not by filename extension. Clients can upload without a valid extension.
+- The converter is safe for concurrent use: each conversion allocates its own input/output via `os.CreateTemp`, so two simultaneous requests never collide on disk.
+- Conversions run under `exec.CommandContext` with a timeout (`-ffmpeg-timeout`, default 60s). Timeouts and non-zero exits are wrapped in `ErrUnsupportedAudio` and surface as HTTP 400.
+- When ffmpeg is missing or disabled, only WAV input is accepted; other formats return HTTP 400 with a clear message. The server never crashes because of a missing ffmpeg.
+- The official Docker image installs ffmpeg by default; binary releases rely on the host system having it available.
