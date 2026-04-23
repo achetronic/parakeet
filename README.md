@@ -58,7 +58,7 @@ The int8 quantized models require approximately 670MB of disk space and 2GB of R
 ## Parakeet vs Whisper
 
 | Aspect        | Parakeet TDT                    | OpenAI Whisper                        |
-|---------------|---------------------------------|---------------------------------------|
+| ------------- | ------------------------------- | ------------------------------------- |
 | Architecture  | Conformer encoder + TDT decoder | Transformer encoder-decoder           |
 | Decoding      | Non-autoregressive (parallel)   | Autoregressive (sequential)           |
 | Speed         | Faster inference due to TDT     | Slower due to autoregressive decoding |
@@ -75,6 +75,7 @@ Parakeet TDT uses Token-and-Duration Transducer decoding, which predicts both th
 - Parakeet TDT ONNX models (downloaded separately)
 
 For building from source:
+
 - Go 1.21 or later
 
 ### Installing ONNX Runtime
@@ -205,45 +206,36 @@ make build
 
 ### Using Docker
 
-The Docker image includes ONNX Runtime but requires models to be mounted at runtime.
+The Docker image that is published in the repository is ready to use. It includes ONNX Runtime and models.
 
 ```bash
-# Pull the image
-docker pull ghcr.io/achetronic/parakeet:latest
-
-# Download models locally
-mkdir -p models
-make models
 
 # Run the container
 docker run -d \
   --name parakeet \
   -p 5092:5092 \
-  -v $(pwd)/models:/models \
   ghcr.io/achetronic/parakeet:latest
-```
-
-Or build the image locally:
-
-```bash
-make docker-build
-make docker-run
 ```
 
 #### Docker Compose
 
 ```yaml
-version: '3.8'
+version: "3.8"
 services:
   parakeet:
     image: ghcr.io/achetronic/parakeet:latest
     ports:
       - "5092:5092"
-    volumes:
-      - ./models:/models
     environment:
-      - PARAKEET_API_KEY=your-secret-key  # optional
-    command: ["-workers", "2"]  # tune to available RAM
+      - PARAKEET_API_KEY=your-secret-key # optional
+    command: [
+    # ATTENTION: models location is always needed.
+    # By default is /models as they are included in that path, don't delete it unless you know exactly what you are doing :)
+      "-models", "/models",
+
+      # Tune the rest of them
+      "-workers", "2"
+    ]
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5092/health"]
@@ -256,13 +248,13 @@ services:
 
 ### Command Line Flags
 
-| Flag | Description | Default | Example |
-|------|-------------|---------|---------|
-| `-port` | HTTP server port | `5092` | `-port 8080` |
-| `-models` | Path to models directory | `./models` | `-models /opt/parakeet/models` |
-| `-log-level` | Log level: debug, info, warn, error | `info` | `-log-level debug` |
-| `-log-format` | Log output format: text or json | `text` | `-log-format json` |
-| `-workers` | Concurrent inference workers (each ~670MB RAM for int8) | `4` | `-workers 2` |
+| Flag          | Description                                             | Default    | Example                        |
+| ------------- | ------------------------------------------------------- | ---------- | ------------------------------ |
+| `-port`       | HTTP server port                                        | `5092`     | `-port 8080`                   |
+| `-models`     | Path to models directory                                | `./models` | `-models /opt/parakeet/models` |
+| `-log-level`  | Log level: debug, info, warn, error                     | `info`     | `-log-level debug`             |
+| `-log-format` | Log output format: text or json                         | `text`     | `-log-format json`             |
+| `-workers`    | Concurrent inference workers (each ~670MB RAM for int8) | `4`        | `-workers 2`                   |
 
 **Examples:**
 
@@ -288,9 +280,9 @@ services:
 
 ### Environment Variables
 
-| Variable          | Description               | Default       |
-|-------------------|---------------------------|---------------|
-| `ONNXRUNTIME_LIB` | Path to libonnxruntime.so | Auto-detected |
+| Variable           | Description                                 | Default               |
+| ------------------ | ------------------------------------------- | --------------------- |
+| `ONNXRUNTIME_LIB`  | Path to libonnxruntime.so                   | Auto-detected         |
 | `PARAKEET_API_KEY` | API key for `/v1/*` endpoint authentication | Empty (auth disabled) |
 
 ### Model Files
@@ -298,7 +290,7 @@ services:
 The following files are required in the models directory:
 
 | File                            | Size   | Description              |
-|---------------------------------|--------|--------------------------|
+| ------------------------------- | ------ | ------------------------ |
 | `config.json`                   | 97 B   | Model configuration      |
 | `vocab.txt`                     | 94 KB  | SentencePiece vocabulary |
 | `encoder-model.int8.onnx`       | 652 MB | Quantized encoder        |
@@ -331,7 +323,7 @@ Transcribes audio into text. Compatible with OpenAI's Whisper API.
 Content-Type: `multipart/form-data`
 
 | Parameter         | Type   | Required | Description                                       |
-|-------------------|--------|----------|---------------------------------------------------|
+| ----------------- | ------ | -------- | ------------------------------------------------- |
 | `file`            | file   | Yes      | Audio file (WAV format, max 25MB)                 |
 | `model`           | string | No       | Model name (accepted but ignored)                 |
 | `language`        | string | No       | ISO-639-1 language code (default: en)             |
@@ -342,6 +334,7 @@ Content-Type: `multipart/form-data`
 **Response**
 
 JSON format (default):
+
 ```json
 {
   "text": "transcribed text here"
@@ -349,6 +342,7 @@ JSON format (default):
 ```
 
 Verbose JSON format:
+
 ```json
 {
   "task": "transcribe",
@@ -474,6 +468,7 @@ export ONNXRUNTIME_LIB=/path/to/libonnxruntime.so
 ```
 
 Common installation locations:
+
 - `/usr/lib/libonnxruntime.so`
 - `/usr/local/lib/libonnxruntime.so`
 - `/opt/onnxruntime/lib/libonnxruntime.so`
