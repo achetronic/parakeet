@@ -37,11 +37,12 @@ Key features:
 - OpenAI Whisper-compatible REST API
 - API key authentication (optional, via environment variable)
 - ONNX Runtime inference (CPU)
-- No Python or external dependencies at runtime
+- No Python dependency at runtime (ffmpeg is an optional system dependency for non-WAV audio)
 - Structured logging with `slog` (text and JSON formats, configurable log level)
 - Support for multiple response formats (JSON, text, SRT, VTT)
 - Multilingual support (English and 25+ languages)
 - Quantized model support for reduced memory footprint
+- Automatic audio conversion for non-WAV formats (MP3, OGG, WebM, FLAC, M4A, AAC, Opus, ...) when ffmpeg is installed
 
 ## Model Architecture
 
@@ -73,6 +74,7 @@ Parakeet TDT uses Token-and-Duration Transducer decoding, which predicts both th
 
 - **ONNX Runtime 1.17.0 or later** (required at runtime)
 - Parakeet TDT ONNX models (downloaded separately)
+- **ffmpeg** (optional) — enables automatic conversion of MP3, OGG, WebM, FLAC, M4A, AAC, Opus and any other ffmpeg-supported format. When ffmpeg is not present, only WAV input is accepted and non-WAV uploads return a 400 error. The official Docker image already ships with ffmpeg.
 
 For building from source:
 
@@ -248,13 +250,16 @@ services:
 
 ### Command Line Flags
 
-| Flag          | Description                                             | Default    | Example                        |
-| ------------- | ------------------------------------------------------- | ---------- | ------------------------------ |
-| `-port`       | HTTP server port                                        | `5092`     | `-port 8080`                   |
-| `-models`     | Path to models directory                                | `./models` | `-models /opt/parakeet/models` |
-| `-log-level`  | Log level: debug, info, warn, error                     | `info`     | `-log-level debug`             |
-| `-log-format` | Log output format: text or json                         | `text`     | `-log-format json`             |
-| `-workers`    | Concurrent inference workers (each ~670MB RAM for int8) | `4`        | `-workers 2`                   |
+| Flag              | Description                                             | Default    | Example                        |
+| ----------------- | ------------------------------------------------------- | ---------- | ------------------------------ |
+| `-port`           | HTTP server port                                        | `5092`     | `-port 8080`                   |
+| `-models`         | Path to models directory                                | `./models` | `-models /opt/parakeet/models` |
+| `-log-level`      | Log level: debug, info, warn, error                     | `info`     | `-log-level debug`             |
+| `-log-format`     | Log output format: text or json                         | `text`     | `-log-format json`             |
+| `-workers`        | Concurrent inference workers (each ~670MB RAM for int8) | `4`        | `-workers 2`                   |
+| `-ffmpeg`         | Enable ffmpeg fallback for non-WAV audio                | `true`     | `-ffmpeg=false`                |
+| `-ffmpeg-path`    | Path to the ffmpeg binary (empty = resolve from `PATH`) | ``         | `-ffmpeg-path /usr/bin/ffmpeg` |
+| `-ffmpeg-timeout` | Maximum wall-clock time for a single ffmpeg conversion  | `60s`      | `-ffmpeg-timeout 30s`          |
 
 **Examples:**
 
@@ -322,14 +327,14 @@ Transcribes audio into text. Compatible with OpenAI's Whisper API.
 
 Content-Type: `multipart/form-data`
 
-| Parameter         | Type   | Required | Description                                       |
-| ----------------- | ------ | -------- | ------------------------------------------------- |
-| `file`            | file   | Yes      | Audio file (WAV format, max 25MB)                 |
-| `model`           | string | No       | Model name (accepted but ignored)                 |
-| `language`        | string | No       | ISO-639-1 language code (default: en)             |
-| `response_format` | string | No       | Output format: json, text, srt, vtt, verbose_json |
-| `prompt`          | string | No       | Accepted but ignored                              |
-| `temperature`     | float  | No       | Accepted but ignored                              |
+| Parameter         | Type   | Required | Description                                                                            |
+| ----------------- | ------ | -------- | -------------------------------------------------------------------------------------- |
+| `file`            | file   | Yes      | Audio file (WAV always supported; MP3/OGG/WebM/FLAC/M4A/AAC/Opus via ffmpeg, max 25MB) |
+| `model`           | string | No       | Model name (accepted but ignored)                                                      |
+| `language`        | string | No       | ISO-639-1 language code (default: en)                                                  |
+| `response_format` | string | No       | Output format: json, text, srt, vtt, verbose_json                                      |
+| `prompt`          | string | No       | Accepted but ignored                                                                   |
+| `temperature`     | float  | No       | Accepted but ignored                                                                   |
 
 **Response**
 
@@ -487,11 +492,21 @@ Use the int8 quantized models (default) instead of fp32. The int8 models require
 
 ### Unsupported audio format
 
-Currently only WAV format is supported. Convert other formats using ffmpeg:
+WAV is always supported natively. Any other format (MP3, OGG, WebM, FLAC, M4A, AAC, Opus, ...) is transcoded on the fly to 16 kHz mono WAV using a local `ffmpeg` binary.
 
-```bash
-ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
-```
+If the server responds with `400 Unsupported or malformed audio`:
+
+1. Install `ffmpeg` and make sure it is in `PATH` (or pass `-ffmpeg-path /absolute/path/to/ffmpeg`). The official Docker image already includes ffmpeg.
+2. Check the server logs. On startup you will see one of:
+   - `ffmpeg conversion enabled binary=/usr/bin/ffmpeg timeout=60s` — ready.
+   - `ffmpeg not found, non-WAV inputs will be rejected` — install it or disable conversion with `-ffmpeg=false` if you only need WAV.
+3. As a manual alternative, convert client-side before uploading:
+
+   ```bash
+   ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
+   ```
+
+Audio is detected by content (magic bytes), not by filename extension, so clients that upload files without an extension still work.
 
 ## License
 

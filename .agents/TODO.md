@@ -4,10 +4,7 @@ Pending tasks and improvements for the project.
 
 ## Audio Format Support
 
-- [ ] **Add ffmpeg-based audio conversion** — Support WebM, OGG, MP3, M4A formats via ffmpeg. Currently `internal/asr/transcriber.go:207` returns "not yet implemented" for these formats. Options:
-  - Shell out to ffmpeg binary (adds system dependency)
-  - Use a pure Go decoder library per format
-  - Accept only WAV and document client-side conversion (current approach)
+- [x] **ffmpeg-based audio conversion** — Implemented in `internal/asr/ffmpeg.go`. WAV is parsed in-process (magic-byte detection); any other format is transcoded via an external `ffmpeg` binary. Configurable with `-ffmpeg`, `-ffmpeg-path`, `-ffmpeg-timeout`. See DD-012 for rationale.
 
 ## API Completeness
 
