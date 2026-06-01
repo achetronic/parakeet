@@ -23,6 +23,8 @@
   - [Environment Variables](#environment-variables)
   - [Model Files](#model-files)
 - [API Reference](#api-reference)
+  - [Transcribe Audio](#transcribe-audio)
+  - [Streaming](#streaming)
 - [Development](#development)
 - [Project Structure](#project-structure)
 - [Troubleshooting](#troubleshooting)
@@ -36,6 +38,7 @@ Key features:
 
 - OpenAI Whisper-compatible REST API
 - API key authentication (optional, via environment variable)
+- Streaming transcriptions via Server-Sent Events (OpenAI-compatible `transcript.text.delta` / `transcript.text.done`)
 - ONNX Runtime inference (CPU)
 - No Python dependency at runtime (ffmpeg is an optional system dependency for non-WAV audio)
 - Structured logging with `slog` (text and JSON formats, configurable log level)
@@ -78,7 +81,7 @@ Parakeet TDT uses Token-and-Duration Transducer decoding, which predicts both th
 
 For building from source:
 
-- Go 1.21 or later
+- Go 1.25 or later
 
 ### Installing ONNX Runtime
 
@@ -333,6 +336,7 @@ Content-Type: `multipart/form-data`
 | `model`           | string | No       | Model name (accepted but ignored)                                                      |
 | `language`        | string | No       | ISO-639-1 language code (default: en)                                                  |
 | `response_format` | string | No       | Output format: json, text, srt, vtt, verbose_json                                      |
+| `stream`          | bool   | No       | When `true`, stream the transcription as Server-Sent Events (see Streaming below)      |
 | `prompt`          | string | No       | Accepted but ignored                                                                   |
 | `temperature`     | float  | No       | Accepted but ignored                                                                   |
 
@@ -375,6 +379,44 @@ curl -X POST http://localhost:5092/v1/audio/transcriptions \
   -F response_format=json
 ```
 
+#### Streaming
+
+Set `stream=true` to receive the transcription incrementally as
+[Server-Sent Events](https://developer.mozilla.org/docs/Web/API/Server-sent_events),
+following OpenAI's streaming transcription protocol. The audio is still
+uploaded in full; the server emits each chunk of text as soon as it is
+decoded, then a final event with the complete text.
+
+Two event types are sent:
+
+- `transcript.text.delta` — a piece of newly transcribed text.
+- `transcript.text.done` — sent once at the end, with the full transcript.
+
+**Example**
+
+```bash
+curl -N -X POST http://localhost:5092/v1/audio/transcriptions \
+  -H "Authorization: Bearer $PARAKEET_API_KEY" \
+  -F file=@audio.wav \
+  -F stream=true
+```
+
+**Response** (`Content-Type: text/event-stream`):
+
+```
+event: transcript.text.delta
+data: {"type":"transcript.text.delta","delta":" Ma"}
+
+event: transcript.text.delta
+data: {"type":"transcript.text.delta","delta":"ybe"}
+
+event: transcript.text.done
+data: {"type":"transcript.text.done","text":"Maybe next time, huh?"}
+```
+
+This is compatible with clients that speak OpenAI's streaming
+transcription API, such as Wyoming OpenAI for Home Assistant.
+
 ### List Models
 
 ```
@@ -400,17 +442,16 @@ make help          # Show all available targets
 
 # Build
 make build         # Build the binary
-make build-static  # Build statically linked binary
 
 # Development
 make run           # Build and run
-make run-dev       # Run with development settings
+make run-dev       # Run with custom port (5092) for development
 make clean         # Remove build artifacts
 
 # Code quality
 make fmt           # Format code
 make vet           # Run go vet
-make lint          # Run all linters
+make lint          # Run all linters (vet + fmt)
 make test          # Run tests
 make test-coverage # Run tests with coverage report
 
@@ -420,8 +461,10 @@ make models-int8   # Download int8 quantized models
 make models-fp32   # Download full precision models
 
 # Docker
-make docker-build  # Build Docker image
-make docker-run    # Run Docker container
+make docker-build-int8  # Build Docker image with int8 models
+make docker-build-fp32  # Build Docker image with fp32 models
+make docker-run-int8    # Run Docker container with int8 models
+make docker-run-fp32    # Run Docker container with fp32 models
 
 # Release
 make release       # Build binaries for all platforms
