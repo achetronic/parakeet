@@ -2,8 +2,8 @@
 FROM golang:1.25-bookworm AS builder
 
 # Install ONNX Runtime for build
-# NOTE: onnxruntime_go v1.19.0 is compatible with ONNX Runtime 1.21.x
-ARG ONNXRUNTIME_VERSION=1.21.0
+# NOTE: onnxruntime_go v1.30.1 targets the ONNX Runtime 1.25.x C API (ORT_API_VERSION 25)
+ARG ONNXRUNTIME_VERSION=1.25.1
 ARG TARGETARCH
 RUN ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "aarch64" || echo "x64") && \
     curl -L -o /tmp/onnxruntime.tgz \
@@ -36,7 +36,7 @@ FROM debian:bookworm-slim
 ARG MODEL_PRECISION=int8
 
 # Install ONNX Runtime and ffmpeg (used for non-WAV audio conversion)
-ARG ONNXRUNTIME_VERSION=1.21.0
+ARG ONNXRUNTIME_VERSION=1.25.1
 ARG TARGETARCH
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \

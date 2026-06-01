@@ -9,7 +9,7 @@ This document helps AI agents work effectively in this codebase.
 ### Key Technologies
 
 - **Language**: Go 1.25+
-- **ML Runtime**: ONNX Runtime 1.21.x (CPU inference)
+- **ML Runtime**: ONNX Runtime 1.25.x (CPU inference)
 - **Model**: NVIDIA Parakeet TDT 0.6B (Conformer-based encoder with Token-and-Duration Transducer decoder)
 - **API**: REST, OpenAI Whisper-compatible
 
@@ -224,7 +224,7 @@ From `go.mod`:
 
 ```
 go 1.25.5
-github.com/yalue/onnxruntime_go v1.19.0
+github.com/yalue/onnxruntime_go v1.30.1
 ```
 
 No other external Go dependencies. Standard library used for HTTP, JSON, audio processing, FFT.
@@ -247,7 +247,7 @@ No other external Go dependencies. Standard library used for HTTP, JSON, audio p
 ### Docker Build
 
 - Multi-stage build with golang:1.25-bookworm builder
-- Runtime: debian:bookworm-slim with ONNX Runtime 1.21.0
+- Runtime: debian:bookworm-slim with ONNX Runtime 1.25.1
 - Models embedded in image during build
 - Health check included
 - Exposed port: 5092
@@ -301,7 +301,7 @@ No other external Go dependencies. Standard library used for HTTP, JSON, audio p
 - Set `ONNXRUNTIME_LIB` env var if not in standard paths
 - Auto-detection checks common paths in Makefile and transcriber.go
 - Use `make deps-onnxruntime` to install (requires sudo)
-- Compatible version: 1.21.x for onnxruntime_go v1.19.0
+- Compatible version: 1.25.x for onnxruntime_go v1.30.1 (binding declares ORT_API_VERSION 25)
 
 ### Model Files Required
 

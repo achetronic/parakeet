@@ -98,7 +98,7 @@ deps-tidy: ## Tidy dependencies
 deps-verify: ## Verify dependencies
 	$(GOMOD) verify
 
-ONNXRUNTIME_VERSION ?= 1.16.3
+ONNXRUNTIME_VERSION ?= 1.25.1
 deps-onnxruntime: ## Install ONNX Runtime library
 	@echo "Installing ONNX Runtime $(ONNXRUNTIME_VERSION)..."
 	@ARCH=$$(uname -m); \
