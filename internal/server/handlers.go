@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"parakeet/internal/asr"
 )
@@ -54,8 +56,17 @@ func (s *Server) handleTranslation(w http.ResponseWriter, r *http.Request) {
 	s.handleTranscription(w, r)
 }
 
-// handleTranscription handles audio transcription requests
+// handleTranscription routes to either multipart or streaming handler based on Content-Type
 func (s *Server) handleTranscription(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
+		s.handleMultipartTranscription(w, r)
+	} else {
+		s.handleStreamingTranscription(w, r)
+	}
+}
+
+// handleMultipartTranscription handles audio transcription requests via multipart form
+func (s *Server) handleMultipartTranscription(w http.ResponseWriter, r *http.Request) {
 	setCORSHeaders(w)
 
 	if r.Method == "OPTIONS" {
@@ -95,6 +106,7 @@ func (s *Server) handleTranscription(w http.ResponseWriter, r *http.Request) {
 	prompt := r.FormValue("prompt")                  // ignored for now
 	responseFormat := r.FormValue("response_format") // json, text, srt, verbose_json, vtt
 	temperature := r.FormValue("temperature")        // ignored
+	streamRequested := parseBool(r.FormValue("stream"))
 
 	_ = model       // Accept but ignore
 	_ = prompt      // Accept but ignore
@@ -120,8 +132,16 @@ func (s *Server) handleTranscription(w http.ResponseWriter, r *http.Request) {
 	// Determine audio format from extension
 	ext := strings.ToLower(filepath.Ext(header.Filename))
 
+	// Streaming path: emit SSE transcript.text.delta events as the decoder
+	// produces text, then a final transcript.text.done. Only json/text
+	// formats are streamable; others fall through to the buffered path.
+	if streamRequested && (responseFormat == "json" || responseFormat == "text") {
+		s.streamTranscription(w, r, audioData, ext, language)
+		return
+	}
+
 	// Transcribe
-	text, err := s.transcriber.Transcribe(audioData, ext, language)
+	text, err := s.transcriber.Transcribe(r.Context(), audioData, ext, language)
 	if err != nil {
 		// Unsupported or malformed audio is a client error: the request
 		// body we received cannot be decoded. Everything else is treated
@@ -187,6 +207,115 @@ func (s *Server) handleTranscription(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(TranscriptionResponse{Text: text})
 	}
+}
+
+// parseBool interprets common truthy form values ("true", "1", "yes", "on").
+func parseBool(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "true", "1", "yes", "on":
+		return true
+	}
+	return false
+}
+
+// streamTranscription transcribes audioData and streams the result to the
+// client as Server-Sent Events, following OpenAI's streaming transcription
+// protocol: a series of transcript.text.delta events followed by a single
+// transcript.text.done event carrying the full transcript.
+func (s *Server) streamTranscription(w http.ResponseWriter, r *http.Request, audioData []byte, ext, language string) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		// The ResponseWriter cannot stream; degrade gracefully to a buffered
+		// JSON response so the client still gets a valid result.
+		text, err := s.transcriber.Transcribe(r.Context(), audioData, ext, language)
+		if err != nil {
+			s.writeTranscribeError(w, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(TranscriptionResponse{Text: text})
+		return
+	}
+
+	// SSE headers must be set before the first write / WriteHeader.
+	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	// Disable proxy buffering (nginx) so events reach the client immediately.
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	// ResponseController lets us set a per-write deadline. This is what makes
+	// a slow/stalled reader recoverable: if the client stops draining its TCP
+	// receive window, the write below fails instead of blocking forever inside
+	// the decoder goroutine (which holds a worker). On failure we cancel the
+	// context so the decoder stops and releases its worker. We deliberately do
+	// NOT use a global http.Server WriteTimeout, which would kill healthy long
+	// streams; the deadline is reset before every event instead.
+	rc := http.NewResponseController(w)
+	const writeDeadline = 30 * time.Second
+
+	// Derive a cancelable context: if a write to the client fails (disconnect,
+	// broken pipe, stalled reader past the deadline), we cancel so the decoder
+	// stops promptly and releases its worker instead of computing into the void.
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+
+	// writeEvent serializes one SSE frame: "event: <type>\ndata: <json>\n\n".
+	// Each event is marshaled independently so a mid-write failure can never
+	// corrupt a subsequent frame. Returns false on write failure.
+	writeEvent := func(eventType string, v interface{}) bool {
+		payload, err := json.Marshal(v)
+		if err != nil {
+			return false
+		}
+		// Bound how long a single event may take to flush to the client. A
+		// reader that has stalled will trip this deadline and the write fails,
+		// freeing the worker (slow-reader DoS mitigation).
+		_ = rc.SetWriteDeadline(time.Now().Add(writeDeadline))
+		if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, payload); err != nil {
+			cancel()
+			return false
+		}
+		if err := rc.Flush(); err != nil {
+			cancel()
+			return false
+		}
+		return true
+	}
+
+	text, err := s.transcriber.TranscribeStream(ctx, audioData, ext, language, func(delta string) {
+		writeEvent("transcript.text.delta", StreamDeltaEvent{Type: "transcript.text.delta", Delta: delta})
+	})
+	if err != nil {
+		// Headers (200 OK) are already sent, so we cannot switch to an HTTP
+		// error status. Client cancellation needs no payload (nobody is
+		// listening); any other failure is surfaced as a terminal SSE error.
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return
+		}
+		msg := "Transcription failed: " + err.Error()
+		errType := "server_error"
+		if errors.Is(err, asr.ErrUnsupportedAudio) {
+			msg = "Unsupported or malformed audio: " + err.Error()
+			errType = "invalid_request_error"
+		}
+		writeEvent("error", ErrorResponse{Error: ErrorDetail{Message: msg, Type: errType}})
+		return
+	}
+
+	writeEvent("transcript.text.done", StreamDoneEvent{Type: "transcript.text.done", Text: text})
+}
+
+// writeTranscribeError maps a transcription error to an OpenAI-compatible HTTP
+// error response. Only safe to call before any body has been written.
+func (s *Server) writeTranscribeError(w http.ResponseWriter, err error) {
+	if errors.Is(err, asr.ErrUnsupportedAudio) {
+		sendError(w, "Unsupported or malformed audio: "+err.Error(), "invalid_request_error", http.StatusBadRequest)
+		return
+	}
+	sendError(w, "Transcription failed: "+err.Error(), "server_error", http.StatusInternalServerError)
 }
 
 // setCORSHeaders sets CORS headers for cross-origin requests

@@ -28,6 +28,20 @@ type Segment struct {
 	NoSpeechProb     float64 `json:"no_speech_prob"`
 }
 
+// StreamDeltaEvent is emitted (as SSE) for each chunk of transcript produced
+// while the model is still decoding. Mirrors OpenAI's transcript.text.delta.
+type StreamDeltaEvent struct {
+	Type  string `json:"type"` // always "transcript.text.delta"
+	Delta string `json:"delta"`
+}
+
+// StreamDoneEvent is the final SSE event, carrying the complete transcript.
+// Mirrors OpenAI's transcript.text.done.
+type StreamDoneEvent struct {
+	Type string `json:"type"` // always "transcript.text.done"
+	Text string `json:"text"`
+}
+
 // ErrorResponse represents an OpenAI-compatible error response
 type ErrorResponse struct {
 	Error ErrorDetail `json:"error"`
