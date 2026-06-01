@@ -2,6 +2,7 @@ package asr
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -319,7 +320,32 @@ func (t *Transcriber) Close() {
 	ort.DestroyEnvironment()
 }
 
-func (t *Transcriber) Transcribe(audioData []byte, format, language string) (string, error) {
+func (t *Transcriber) Transcribe(ctx context.Context, audioData []byte, format, language string) (string, error) {
+	return t.transcribe(ctx, audioData, format, language, nil)
+}
+
+// TranscribeStream behaves like Transcribe but invokes emit with each new
+// chunk of decoded text as soon as the underlying TDT decoder produces it.
+// Concatenating all emitted deltas reproduces the transcript verbatim, before
+// the final whitespace normalization. The returned full transcript (also sent
+// as transcript.text.done) is that same text with leading/trailing whitespace
+// trimmed and runs of spaces collapsed, so it may differ from the raw delta
+// concatenation by surrounding/duplicate spaces only.
+// emit is always called from the same goroutine that called TranscribeStream.
+func (t *Transcriber) TranscribeStream(ctx context.Context, audioData []byte, format, language string, emit func(delta string)) (string, error) {
+	return t.transcribe(ctx, audioData, format, language, emit)
+}
+
+// transcribe is the shared implementation. When emit is non-nil, decoded text
+// is streamed delta by delta as tokens are produced.
+func (t *Transcriber) transcribe(ctx context.Context, audioData []byte, format, language string, emit func(delta string)) (string, error) {
+	// Let's check context immediately
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	default:
+	}
+
 	waveform, err := t.loadAudio(audioData, format)
 	if err != nil {
 		return "", fmt.Errorf("failed to load audio: %w", err)
@@ -345,7 +371,29 @@ func (t *Transcriber) Transcribe(audioData []byte, format, language string) (str
 		slog.Debug("mel features extracted", "frames", len(features), "featuresPerFrame", len(features[0]))
 	}
 
-	tokens, err := t.runInference(features)
+	// Build a token-level callback that converts each emitted token into a
+	// printable text delta, skipping special <...> tokens. Streaming is
+	// purely additive: callers get the same text whether or not emit is set.
+	var onToken func(tok int)
+	if emit != nil {
+		onToken = func(tok int) {
+			text, ok := t.vocab[tok]
+			if !ok {
+				return
+			}
+			if strings.HasPrefix(text, "<") && strings.HasSuffix(text, ">") {
+				return
+			}
+			// vocab values already have word-boundary marks (U+2581) translated
+			// to spaces at load time (see loadVocab), so the token text is emitted
+			// as-is. Clients accumulate deltas to render text live.
+			if text != "" {
+				emit(text)
+			}
+		}
+	}
+
+	tokens, err := t.runInference(ctx, features, onToken)
 	if err != nil {
 		return "", fmt.Errorf("inference failed: %w", err)
 	}
@@ -392,7 +440,7 @@ func (t *Transcriber) loadAudio(data []byte, format string) ([]float32, error) {
 	return parseWAV(wavData)
 }
 
-func (t *Transcriber) runInference(features [][]float32) ([]int, error) {
+func (t *Transcriber) runInference(ctx context.Context, features [][]float32, onToken func(tok int)) ([]int, error) {
 	batchSize := int64(1)
 	numFeatures := int64(t.config.FeaturesSize)
 	numFrames := int64(len(features))
@@ -459,13 +507,24 @@ func (t *Transcriber) runInference(features [][]float32) ([]int, error) {
 
 	// Decoder tensors (encoderOut) must remain alive during tdtDecode.
 	// The defers above fire after tdtDecode returns, so this is safe.
-	return t.tdtDecode(encoderOut, actualEncodedLen)
+	return t.tdtDecode(ctx, encoderOut, actualEncodedLen, onToken)
 }
 
-func (t *Transcriber) tdtDecode(encoderOut []float32, encodedLen int64) ([]int, error) {
-	// Acquire a pre-initialized worker. Blocks if all workers are busy.
-	w := <-t.decoderPool
-	defer func() { t.decoderPool <- w }()
+func (t *Transcriber) tdtDecode(ctx context.Context, encoderOut []float32, encodedLen int64, onToken func(tok int)) ([]int, error) {
+	// Acquire a pre-initialized worker. Honor cancellation so a client that
+	// disconnects while all workers are busy does not leak a goroutine.
+	var w *decoderWorker
+	select {
+	case w = <-t.decoderPool:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	// Return the worker to the pool when done. Guard against a panic from
+	// sending on a closed pool during shutdown so we never crash the process.
+	defer func() {
+		defer func() { _ = recover() }()
+		t.decoderPool <- w
+	}()
 
 	if DebugMode {
 		slog.Debug("TDT decode started", "encoderOutLen", len(encoderOut), "encodedLen", encodedLen)
@@ -530,6 +589,17 @@ func (t *Transcriber) tdtDecode(encoderOut []float32, encodedLen int64) ([]int, 
 			tokens = append(tokens, token)
 			prevToken = token
 			emittedTokens++
+			if onToken != nil {
+				onToken(token)
+			}
+		}
+
+		// Honor cancellation between decode steps so a disconnected client
+		// or an expired deadline frees the worker promptly.
+		select {
+		case <-ctx.Done():
+			return tokens, ctx.Err()
+		default:
 		}
 
 		if step > 0 {

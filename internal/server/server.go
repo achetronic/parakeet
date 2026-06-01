@@ -111,6 +111,11 @@ func (s *Server) Run() error {
 	s.httpServer = &http.Server{
 		Addr:    addr,
 		Handler: s.mux,
+		// ReadHeaderTimeout bounds the time to read request headers, defending
+		// against Slowloris without capping the body upload or the response.
+		// We intentionally do NOT set WriteTimeout: streaming (SSE) responses
+		// are long-lived and a global write deadline would cut them off.
+		ReadHeaderTimeout: 30 * time.Second,
 	}
 	slog.Info("Parakeet ASR server started", "addr", addr)
 	slog.Info("endpoints registered",
