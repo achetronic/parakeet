@@ -213,7 +213,7 @@ func NewTranscriber(modelsDir string, workers int, opts Options) (*Transcriber, 
 			"/usr/local/lib/libonnxruntime.so",
 			"/opt/onnxruntime/lib/libonnxruntime.so",
 			"./libonnxruntime.so",
-			"libonnxruntime.so.1.17.0",
+			"libonnxruntime.so.1.25.1",
 		}
 		for _, p := range commonPaths {
 			if _, err := os.Stat(p); err == nil {

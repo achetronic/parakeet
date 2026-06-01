@@ -38,11 +38,11 @@ Architectural and design decisions made in this project.
 
 **Decision**: Use ONNX Runtime via `onnxruntime_go` bindings (CPU only).
 
-**Rationale**: ONNX is a portable, vendor-neutral format. CPU inference avoids GPU dependency, simplifying deployment. The Go bindings (`onnxruntime_go v1.19.0`) provide direct integration without CGo complexity.
+**Rationale**: ONNX is a portable, vendor-neutral format. CPU inference avoids GPU dependency, simplifying deployment. The Go bindings (`onnxruntime_go v1.30.1`) provide direct integration without CGo complexity.
 
 **Consequences**:
 
-- ONNX Runtime library (1.21.x) must be installed separately on the host
+- ONNX Runtime library (1.25.x) must be installed separately on the host
 - `ONNXRUNTIME_LIB` env var needed if not in standard paths
 - Tensors must be destroyed manually (no GC integration)
 - Memory: ~2GB RAM for int8, ~6GB for fp32
@@ -103,7 +103,7 @@ Architectural and design decisions made in this project.
 
 **Consequences**:
 
-- Image includes ONNX Runtime 1.21.0
+- Image includes ONNX Runtime 1.25.1
 - Separate images for int8 and fp32 model variants
 - Health check endpoint (`/health`) included for orchestration
 - Exposed port: 5092
