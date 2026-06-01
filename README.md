@@ -88,7 +88,7 @@ ONNX Runtime is required to run the inference. Choose the installation method fo
 
 ```bash
 # Option 1: Download from GitHub releases (recommended)
-curl -L -o onnxruntime.tgz "https://github.com/microsoft/onnxruntime/releases/download/v1.17.0/onnxruntime-linux-x64-1.25.1.tgz"
+curl -L -o onnxruntime.tgz "https://github.com/microsoft/onnxruntime/releases/download/v1.25.1/onnxruntime-linux-x64-1.25.1.tgz"
 tar xzf onnxruntime.tgz
 sudo cp onnxruntime-linux-x64-1.25.1/lib/* /usr/local/lib/
 sudo ldconfig
@@ -102,7 +102,7 @@ sudo apt install libonnxruntime-dev
 
 ```bash
 # Download from GitHub releases
-curl -L -o onnxruntime.tgz "https://github.com/microsoft/onnxruntime/releases/download/v1.17.0/onnxruntime-linux-x64-1.25.1.tgz"
+curl -L -o onnxruntime.tgz "https://github.com/microsoft/onnxruntime/releases/download/v1.25.1/onnxruntime-linux-x64-1.25.1.tgz"
 tar xzf onnxruntime.tgz
 sudo cp onnxruntime-linux-x64-1.25.1/lib/* /usr/local/lib/
 sudo ldconfig
@@ -115,7 +115,7 @@ sudo ldconfig
 yay -S onnxruntime
 
 # Or manually
-curl -L -o onnxruntime.tgz "https://github.com/microsoft/onnxruntime/releases/download/v1.17.0/onnxruntime-linux-x64-1.25.1.tgz"
+curl -L -o onnxruntime.tgz "https://github.com/microsoft/onnxruntime/releases/download/v1.25.1/onnxruntime-linux-x64-1.25.1.tgz"
 tar xzf onnxruntime.tgz
 sudo cp onnxruntime-linux-x64-1.25.1/lib/* /usr/local/lib/
 sudo ldconfig
@@ -131,7 +131,7 @@ apk add onnxruntime
 
 ```bash
 # Download and extract
-curl -L -o onnxruntime.tgz "https://github.com/microsoft/onnxruntime/releases/download/v1.17.0/onnxruntime-linux-x64-1.25.1.tgz"
+curl -L -o onnxruntime.tgz "https://github.com/microsoft/onnxruntime/releases/download/v1.25.1/onnxruntime-linux-x64-1.25.1.tgz"
 tar xzf onnxruntime.tgz
 
 # Install to /usr/local
@@ -146,7 +146,7 @@ export ONNXRUNTIME_LIB=$(pwd)/onnxruntime-linux-x64-1.25.1/lib/libonnxruntime.so
 #### ARM64 (Raspberry Pi, etc.)
 
 ```bash
-curl -L -o onnxruntime.tgz "https://github.com/microsoft/onnxruntime/releases/download/v1.17.0/onnxruntime-linux-aarch64-1.25.1.tgz"
+curl -L -o onnxruntime.tgz "https://github.com/microsoft/onnxruntime/releases/download/v1.25.1/onnxruntime-linux-aarch64-1.25.1.tgz"
 tar xzf onnxruntime.tgz
 sudo cp onnxruntime-linux-aarch64-1.25.1/lib/* /usr/local/lib/
 sudo ldconfig
