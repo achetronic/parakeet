@@ -1,0 +1,115 @@
+# CUDA / GPU image.
+#
+# Differs from the CPU Dockerfile in two ways: it ships the GPU build of ONNX
+# Runtime (onnxruntime-linux-x64-gpu-*, which contains the CUDA execution
+# provider; the CPU tarball does not), and it runs on an NVIDIA CUDA base image.
+# Builder and runtime use the SAME Ubuntu 22.04 CUDA base so the dynamically
+# linked binary's glibc matches the runtime's.
+#
+# NOTE: ONNX Runtime 1.25.x's CUDA EP targets CUDA 12.x + cuDNN 9.x, which the
+# base image provides. linux/amd64 ONLY -- Microsoft ships no standard
+# linux/arm64 GPU build of ONNX Runtime.
+#
+# Requires the host to have NVIDIA drivers and the NVIDIA Container Toolkit, and
+# the container to be run with GPU access (e.g. `docker run --gpus all ...`).
+
+ARG ONNXRUNTIME_VERSION=1.25.1
+ARG GO_VERSION=1.25.5
+ARG CUDA_RUNTIME_IMAGE=nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04
+ARG CUDA_DEVEL_IMAGE=nvidia/cuda:12.6.3-cudnn-devel-ubuntu22.04
+
+# Build stage - on the CUDA devel base so the build glibc matches the runtime
+FROM ${CUDA_DEVEL_IMAGE} AS builder
+ARG ONNXRUNTIME_VERSION
+ARG GO_VERSION
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl tar \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Go (Ubuntu's packaged Go is too old for this module)
+RUN curl -L -o /tmp/go.tgz "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" \
+    && tar -C /usr/local -xzf /tmp/go.tgz \
+    && rm /tmp/go.tgz
+ENV PATH=/usr/local/go/bin:$PATH
+
+# ONNX Runtime GPU build (provides headers + libs for CGO)
+RUN curl -L -o /tmp/onnxruntime.tgz \
+    "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-x64-gpu-${ONNXRUNTIME_VERSION}.tgz" \
+    && tar -xzf /tmp/onnxruntime.tgz -C /opt \
+    && mv /opt/onnxruntime-linux-x64-gpu-${ONNXRUNTIME_VERSION} /opt/onnxruntime \
+    && rm /tmp/onnxruntime.tgz
+
+ENV CGO_ENABLED=1
+ENV CGO_LDFLAGS="-L/opt/onnxruntime/lib"
+ENV CGO_CFLAGS="-I/opt/onnxruntime/include"
+ENV LD_LIBRARY_PATH=/opt/onnxruntime/lib
+
+WORKDIR /app
+
+# Copy go mod files first for better caching
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build binary with CGO
+RUN go build -ldflags="-s -w" -o parakeet .
+
+# Runtime stage
+FROM ${CUDA_RUNTIME_IMAGE}
+
+# Model precision: "fp32" (default, GPU-appropriate, ~2.5GB) or "int8" (~670MB)
+ARG MODEL_PRECISION=fp32
+ARG ONNXRUNTIME_VERSION
+
+# Install ONNX Runtime GPU build and ffmpeg (used for non-WAV audio conversion)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    ffmpeg \
+    && curl -L -o /tmp/onnxruntime.tgz \
+    "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-x64-gpu-${ONNXRUNTIME_VERSION}.tgz" \
+    && tar -xzf /tmp/onnxruntime.tgz -C /opt \
+    && mv /opt/onnxruntime-linux-x64-gpu-${ONNXRUNTIME_VERSION} /opt/onnxruntime \
+    && rm /tmp/onnxruntime.tgz \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set library path. The ONNX Runtime GPU libs and the CUDA/cuDNN libs from the
+# base image must both be resolvable.
+ENV LD_LIBRARY_PATH=/opt/onnxruntime/lib:/usr/local/cuda/lib64
+ENV ONNXRUNTIME_LIB=/opt/onnxruntime/lib/libonnxruntime.so
+
+WORKDIR /app
+
+# Download and embed models based on MODEL_PRECISION arg, BEFORE copying the
+# binary, so a code change only invalidates the small COPY layer below and the
+# multi-GB model layer stays cached across rebuilds.
+# fp32: encoder-model.onnx, encoder-model.onnx.data, decoder_joint-model.onnx (~2.5GB total)
+# int8: encoder-model.int8.onnx, decoder_joint-model.int8.onnx (~670MB total)
+RUN mkdir -p /models && \
+    curl -L -o /models/config.json "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/config.json" && \
+    curl -L -o /models/vocab.txt "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/vocab.txt" && \
+    curl -L -o /models/nemo128.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/nemo128.onnx" && \
+    if [ "$MODEL_PRECISION" = "int8" ]; then \
+        curl -L -o /models/encoder-model.int8.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/encoder-model.int8.onnx" && \
+        curl -L -o /models/decoder_joint-model.int8.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/decoder_joint-model.int8.onnx"; \
+    else \
+        curl -L -o /models/encoder-model.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/encoder-model.onnx" && \
+        curl -L -o /models/encoder-model.onnx.data "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/encoder-model.onnx.data" && \
+        curl -L -o /models/decoder_joint-model.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/decoder_joint-model.onnx"; \
+    fi && \
+    apt-get purge -y curl && \
+    apt-get autoremove -y && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy binary from builder (last, so rebuilds after code changes stay fast)
+COPY --from=builder /app/parakeet /app/parakeet
+
+# Expose port
+EXPOSE 5092
+
+# Run with the CUDA execution provider enabled by default
+ENTRYPOINT ["/app/parakeet"]
+CMD ["-port", "5092", "-models", "/models", "-gpu", "cuda"]
