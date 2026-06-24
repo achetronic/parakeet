@@ -249,6 +249,50 @@ services:
       retries: 3
 ```
 
+### GPU Inference (CUDA)
+
+Parakeet can offload inference to an NVIDIA GPU through the ONNX Runtime CUDA
+execution provider. GPU support ships as a dedicated image with the `-cuda`
+tag suffix; it bundles the GPU build of ONNX Runtime and the fp32 models on a
+CUDA base image.
+
+**Prerequisites:** an NVIDIA GPU with up-to-date drivers and the
+[NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+installed on the host. The CUDA image is `linux/amd64` only.
+
+```bash
+docker run -d \
+  --name parakeet \
+  --gpus all \
+  -p 5092:5092 \
+  ghcr.io/achetronic/parakeet:latest-cuda
+```
+
+The CUDA image enables the GPU by default (`-gpu cuda`). For a non-Docker
+binary, or to select a specific device, use the `-gpu`/`-gpu-device` flags or
+the `PARAKEET_GPU`/`PARAKEET_GPU_DEVICE` environment variables:
+
+```bash
+./parakeet -gpu cuda -gpu-device 0
+# or, equivalently, via environment:
+PARAKEET_GPU=cuda PARAKEET_GPU_DEVICE=0 ./parakeet
+```
+
+If the requested provider cannot be initialized (missing CUDA libraries, driver
+or version mismatch), the server fails at startup rather than silently falling
+back to CPU, so misconfiguration is visible immediately.
+
+> [!NOTE]
+> fp32 is the GPU-appropriate precision and is the default for the CUDA image.
+> CPU images and CPU mode are unaffected by these flags.
+
+**Memory and audio length.** The encoder processes the whole file in a single
+pass, so peak memory scales with audio duration. On GPU this is bounded by VRAM:
+very long inputs (roughly an hour or more on a 24 GB card) can exceed device
+memory and fail with an ONNX Runtime allocation error. Segment long audio (for
+example with `ffmpeg -i in.wav -f segment -segment_time 300 -ar 16000 -ac 1
+chunk_%03d.wav`) or use a CPU image, which is bounded by system RAM instead.
+
 ## Configuration
 
 ### Command Line Flags
@@ -263,6 +307,8 @@ services:
 | `-ffmpeg`         | Enable ffmpeg fallback for non-WAV audio                | `true`     | `-ffmpeg=false`                |
 | `-ffmpeg-path`    | Path to the ffmpeg binary (empty = resolve from `PATH`) | ``         | `-ffmpeg-path /usr/bin/ffmpeg` |
 | `-ffmpeg-timeout` | Maximum wall-clock time for a single ffmpeg conversion  | `60s`      | `-ffmpeg-timeout 30s`          |
+| `-gpu`            | Execution provider: `cpu` or `cuda`                     | `cpu`      | `-gpu cuda`                    |
+| `-gpu-device`     | GPU device index for `cuda`                             | `0`        | `-gpu-device 1`                |
 
 **Examples:**
 
@@ -290,8 +336,12 @@ services:
 
 | Variable           | Description                                 | Default               |
 | ------------------ | ------------------------------------------- | --------------------- |
-| `ONNXRUNTIME_LIB`  | Path to libonnxruntime.so                   | Auto-detected         |
-| `PARAKEET_API_KEY` | API key for `/v1/*` endpoint authentication | Empty (auth disabled) |
+| `ONNXRUNTIME_LIB`     | Path to libonnxruntime.so                          | Auto-detected         |
+| `PARAKEET_API_KEY`    | API key for `/v1/*` endpoint authentication        | Empty (auth disabled) |
+| `PARAKEET_GPU`        | Execution provider when `-gpu` is unset: `cpu`/`cuda` | `cpu`              |
+| `PARAKEET_GPU_DEVICE` | GPU device index when `-gpu-device` is unset       | `0`                   |
+
+An explicit `-gpu`/`-gpu-device` flag always overrides the corresponding environment variable.
 
 ### Model Files
 
@@ -463,8 +513,10 @@ make models-fp32   # Download full precision models
 # Docker
 make docker-build-int8  # Build Docker image with int8 models
 make docker-build-fp32  # Build Docker image with fp32 models
+make docker-build-cuda  # Build CUDA/GPU image with fp32 models
 make docker-run-int8    # Run Docker container with int8 models
 make docker-run-fp32    # Run Docker container with fp32 models
+make docker-run-cuda    # Run CUDA/GPU container (needs --gpus all)
 
 # Release
 make release       # Build binaries for all platforms
