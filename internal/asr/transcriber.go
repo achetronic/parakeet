@@ -79,7 +79,7 @@ func (w *decoderWorker) destroy() {
 	}
 }
 
-func newDecoderWorker(decoderPath string, vocabSize int) (*decoderWorker, error) {
+func newDecoderWorker(decoderPath string, vocabSize int, sessOpts *ort.SessionOptions) (*decoderWorker, error) {
 	w := &decoderWorker{}
 	var err error
 
@@ -139,7 +139,7 @@ func newDecoderWorker(decoderPath string, vocabSize int) (*decoderWorker, error)
 		[]string{"outputs", "output_states_1", "output_states_2"},
 		[]ort.ArbitraryTensor{w.encOut, w.targets, w.targetLen, w.state1In, w.state2In},
 		[]ort.ArbitraryTensor{w.output, w.state1Out, w.state2Out},
-		nil,
+		sessOpts,
 	)
 	if err != nil {
 		w.destroy()
@@ -147,6 +147,34 @@ func newDecoderWorker(decoderPath string, vocabSize int) (*decoderWorker, error)
 	}
 
 	return w, nil
+}
+
+// Provider selects the ONNX Runtime execution provider used for inference.
+type Provider string
+
+const (
+	ProviderCPU  Provider = "cpu"
+	ProviderCUDA Provider = "cuda"
+)
+
+// ParseProvider normalizes a user-supplied provider string. An empty value
+// defaults to CPU. Unknown values are rejected so a misconfiguration fails
+// loudly at startup instead of silently falling back.
+func ParseProvider(s string) (Provider, error) {
+	switch Provider(strings.ToLower(strings.TrimSpace(s))) {
+	case "", ProviderCPU:
+		return ProviderCPU, nil
+	case ProviderCUDA:
+		return ProviderCUDA, nil
+	default:
+		return "", fmt.Errorf("unsupported GPU provider %q (supported: cpu, cuda)", s)
+	}
+}
+
+// GPUConfig selects the execution provider and, for GPU providers, the device.
+type GPUConfig struct {
+	Provider Provider
+	DeviceID int
 }
 
 type Transcriber struct {
@@ -162,9 +190,61 @@ type Transcriber struct {
 }
 
 // Options groups optional knobs passed to NewTranscriber. Zero values keep
-// the previous behavior: WAV-only input, no ffmpeg conversion.
+// the previous behavior: WAV-only input, no ffmpeg conversion, CPU inference.
 type Options struct {
 	FFmpeg FFmpegConfig
+	GPU    GPUConfig
+}
+
+// buildSessionOptions returns the ONNX Runtime session options for the
+// configured execution provider. It returns (nil, nil) for the CPU provider so
+// sessions are created with default CPU behavior, identical to the pre-GPU code
+// path. For a GPU provider it returns a configured *ort.SessionOptions that the
+// caller owns and must Destroy after all sessions are created (ORT copies the
+// options into each session at creation time, so the object is safe to free
+// once sessions exist). A future execution provider is added here.
+func buildSessionOptions(gpu GPUConfig) (*ort.SessionOptions, error) {
+	if gpu.Provider == ProviderCPU || gpu.Provider == "" {
+		return nil, nil
+	}
+
+	opts, err := ort.NewSessionOptions()
+	if err != nil {
+		return nil, fmt.Errorf("create session options: %w", err)
+	}
+
+	switch gpu.Provider {
+	case ProviderCUDA:
+		cudaOpts, err := ort.NewCUDAProviderOptions()
+		if err != nil {
+			opts.Destroy()
+			return nil, fmt.Errorf("create CUDA provider options: %w", err)
+		}
+		defer cudaOpts.Destroy()
+		if err := cudaOpts.Update(map[string]string{
+			"device_id": strconv.Itoa(gpu.DeviceID),
+			// EXHAUSTIVE (the ORT default) benchmarks every cuDNN convolution
+			// algorithm on first run and can reserve many GB of workspace for a
+			// single Conv, which OOMs the encoder on longer audio. HEURISTIC
+			// picks a good algorithm without that up-front allocation.
+			"cudnn_conv_algo_search": "HEURISTIC",
+			// Grow the GPU arena by exactly what is requested instead of the
+			// default power-of-two steps, which otherwise compounds the above.
+			"arena_extend_strategy": "kSameAsRequested",
+		}); err != nil {
+			opts.Destroy()
+			return nil, fmt.Errorf("set CUDA provider options (device %d): %w", gpu.DeviceID, err)
+		}
+		if err := opts.AppendExecutionProviderCUDA(cudaOpts); err != nil {
+			opts.Destroy()
+			return nil, fmt.Errorf("enable CUDA execution provider (device %d): %w", gpu.DeviceID, err)
+		}
+	default:
+		opts.Destroy()
+		return nil, fmt.Errorf("unsupported GPU provider %q (supported: cpu, cuda)", gpu.Provider)
+	}
+
+	return opts, nil
 }
 
 // NewTranscriber loads models and initializes the decoder worker pool.
@@ -249,6 +329,17 @@ func NewTranscriber(modelsDir string, workers int, opts Options) (*Transcriber, 
 		}
 	}
 
+	// Build execution-provider session options. nil for CPU (default behavior);
+	// a configured object for GPU that we own and destroy once every session
+	// below has been created (ORT copies options into each session).
+	sessOpts, err := buildSessionOptions(opts.GPU)
+	if err != nil {
+		return nil, fmt.Errorf("failed to configure execution provider: %w", err)
+	}
+	if sessOpts != nil {
+		defer sessOpts.Destroy()
+	}
+
 	// Encoder runs as a single long-lived dynamic session reused across requests.
 	// Input/output shapes vary with audio length, so we pass freshly shaped
 	// tensors to each Run rather than rebuilding the session. ORT Run is
@@ -258,7 +349,7 @@ func NewTranscriber(modelsDir string, workers int, opts Options) (*Transcriber, 
 		encoderPath,
 		[]string{"audio_signal", "length"},
 		[]string{"outputs", "encoded_lengths"},
-		nil,
+		sessOpts,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create encoder session: %w", err)
@@ -271,7 +362,7 @@ func NewTranscriber(modelsDir string, workers int, opts Options) (*Transcriber, 
 	}
 	t.decoderPool = make(chan *decoderWorker, workers)
 	for i := 0; i < workers; i++ {
-		w, err := newDecoderWorker(decoderPath, t.vocabSize)
+		w, err := newDecoderWorker(decoderPath, t.vocabSize, sessOpts)
 		if err != nil {
 			t.Close()
 			return nil, fmt.Errorf("failed to create decoder worker %d: %w", i, err)
@@ -281,12 +372,21 @@ func NewTranscriber(modelsDir string, workers int, opts Options) (*Transcriber, 
 
 	slog.Info("transcriber initialized",
 		"workers", workers,
+		"provider", string(provider(opts.GPU)),
 		"encoder", filepath.Base(encoderPath),
 		"decoder", filepath.Base(decoderPath),
 		"vocabSize", t.vocabSize,
 	)
 
 	return t, nil
+}
+
+// provider returns the effective provider, defaulting empty to CPU, for logging.
+func provider(gpu GPUConfig) Provider {
+	if gpu.Provider == "" {
+		return ProviderCPU
+	}
+	return gpu.Provider
 }
 
 func (t *Transcriber) loadVocab(path string) error {

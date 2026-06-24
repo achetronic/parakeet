@@ -33,6 +33,13 @@ type Config struct {
 
 	// FFmpegTimeout bounds the duration of a single conversion.
 	FFmpegTimeout time.Duration
+
+	// GPUProvider selects the ONNX Runtime execution provider: "cpu" (default)
+	// or "cuda". An unknown value fails fast at startup.
+	GPUProvider string
+
+	// GPUDeviceID selects the GPU device index for GPU providers.
+	GPUDeviceID int
 }
 
 // Server represents the HTTP server for the ASR service
@@ -49,12 +56,21 @@ func New(cfg Config) (*Server, error) {
 	// Enable debug mode in ASR package
 	asr.DebugMode = cfg.LogLevel == "debug"
 
+	provider, err := asr.ParseProvider(cfg.GPUProvider)
+	if err != nil {
+		return nil, err
+	}
+
 	// Initialize transcriber
 	transcriber, err := asr.NewTranscriber(cfg.ModelsDir, cfg.Workers, asr.Options{
 		FFmpeg: asr.FFmpegConfig{
 			Enabled:    cfg.FFmpegEnabled,
 			BinaryPath: cfg.FFmpegPath,
 			Timeout:    cfg.FFmpegTimeout,
+		},
+		GPU: asr.GPUConfig{
+			Provider: provider,
+			DeviceID: cfg.GPUDeviceID,
 		},
 	})
 	if err != nil {
