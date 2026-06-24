@@ -156,7 +156,7 @@ type Transcriber struct {
 	blankIdx         int
 	maxTokensPerStep int
 	mel              *MelFilterbank
-	encoderPath      string
+	encoder          *ort.DynamicAdvancedSession
 	decoderPool      chan *decoderWorker
 	ffmpeg           *ffmpegConverter
 }
@@ -231,11 +231,11 @@ func NewTranscriber(modelsDir string, workers int, opts Options) (*Transcriber, 
 		return nil, fmt.Errorf("failed to initialize ONNX Runtime: %w", err)
 	}
 
-	// Resolve encoder path (stored, reused per request)
-	t.encoderPath = filepath.Join(modelsDir, "encoder-model.int8.onnx")
-	if _, err := os.Stat(t.encoderPath); os.IsNotExist(err) {
-		t.encoderPath = filepath.Join(modelsDir, "encoder-model.onnx")
-		if _, err := os.Stat(t.encoderPath); os.IsNotExist(err) {
+	// Resolve encoder path
+	encoderPath := filepath.Join(modelsDir, "encoder-model.int8.onnx")
+	if _, err := os.Stat(encoderPath); os.IsNotExist(err) {
+		encoderPath = filepath.Join(modelsDir, "encoder-model.onnx")
+		if _, err := os.Stat(encoderPath); os.IsNotExist(err) {
 			return nil, fmt.Errorf("encoder model not found. Download from https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx")
 		}
 	}
@@ -247,6 +247,21 @@ func NewTranscriber(modelsDir string, workers int, opts Options) (*Transcriber, 
 		if _, err := os.Stat(decoderPath); os.IsNotExist(err) {
 			return nil, fmt.Errorf("decoder model not found. Download from https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx")
 		}
+	}
+
+	// Encoder runs as a single long-lived dynamic session reused across requests.
+	// Input/output shapes vary with audio length, so we pass freshly shaped
+	// tensors to each Run rather than rebuilding the session. ORT Run is
+	// thread-safe on a shared session and every request supplies its own
+	// tensors, so this is safe under the concurrent decoder worker model.
+	t.encoder, err = ort.NewDynamicAdvancedSession(
+		encoderPath,
+		[]string{"audio_signal", "length"},
+		[]string{"outputs", "encoded_lengths"},
+		nil,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create encoder session: %w", err)
 	}
 
 	// Create decoder worker pool — each worker owns a persistent session and
@@ -266,7 +281,7 @@ func NewTranscriber(modelsDir string, workers int, opts Options) (*Transcriber, 
 
 	slog.Info("transcriber initialized",
 		"workers", workers,
-		"encoder", filepath.Base(t.encoderPath),
+		"encoder", filepath.Base(encoderPath),
 		"decoder", filepath.Base(decoderPath),
 		"vocabSize", t.vocabSize,
 	)
@@ -309,8 +324,13 @@ func (t *Transcriber) loadVocab(path string) error {
 	return scanner.Err()
 }
 
-// Close releases all pool workers and the ONNX Runtime environment.
+// Close releases the encoder session, all pool workers, and the ONNX Runtime
+// environment. Safe to call after requests have run.
 func (t *Transcriber) Close() {
+	if t.encoder != nil {
+		t.encoder.Destroy()
+		t.encoder = nil
+	}
 	if t.decoderPool != nil {
 		close(t.decoderPool)
 		for w := range t.decoderPool {
@@ -479,22 +499,12 @@ func (t *Transcriber) runInference(ctx context.Context, features [][]float32, on
 	}
 	defer outLenTensor.Destroy()
 
-	// Encoder session is created per request because input shape varies with audio length.
-	// The session object loads the model graph; the file is OS-cached after first request.
-	encoderSession, err := ort.NewAdvancedSession(
-		t.encoderPath,
-		[]string{"audio_signal", "length"},
-		[]string{"outputs", "encoded_lengths"},
-		[]ort.ArbitraryTensor{inputTensor, lengthTensor},
-		[]ort.ArbitraryTensor{outputTensor, outLenTensor},
-		nil,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("create encoder session: %w", err)
-	}
-	defer encoderSession.Destroy()
-
-	if err := encoderSession.Run(); err != nil {
+	// Reuse the shared encoder session. Shapes vary per request, so tensors are
+	// supplied to Run each time; the session itself is built once at startup.
+	if err := t.encoder.Run(
+		[]ort.Value{inputTensor, lengthTensor},
+		[]ort.Value{outputTensor, outLenTensor},
+	); err != nil {
 		return nil, fmt.Errorf("encoder run failed: %w", err)
 	}
 
