@@ -14,7 +14,7 @@ Pending tasks and improvements for the project.
 
 ## Performance
 
-- [ ] **Explore GPU inference** — Current implementation is CPU-only via ONNX Runtime. Adding CUDA/TensorRT execution provider could significantly improve throughput.
+- [x] **GPU inference** — Implemented via ONNX Runtime execution providers. Opt in with `-gpu cuda` / `-gpu-device N`; a dedicated `*-cuda` Docker image ships the GPU build. CPU remains the default. See DD-013. TensorRT and other accelerators remain out of scope (extend `buildSessionOptions`).
 - [ ] **Batch inference support** — Current implementation processes one audio file at a time. Batching multiple requests could improve throughput under load.
 - [ ] **Higher quality resampling** — `audio.go:resample()` uses linear interpolation. Sinc-based or polyphase resampling would improve audio quality.
 

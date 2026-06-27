@@ -9,7 +9,7 @@ This document helps AI agents work effectively in this codebase.
 ### Key Technologies
 
 - **Language**: Go 1.25+
-- **ML Runtime**: ONNX Runtime 1.25.x (CPU inference)
+- **ML Runtime**: ONNX Runtime 1.25.x (CPU by default; optional CUDA GPU via execution providers)
 - **Model**: NVIDIA Parakeet TDT 0.6B (Conformer-based encoder with Token-and-Duration Transducer decoder)
 - **API**: REST, OpenAI Whisper-compatible
 
@@ -49,6 +49,8 @@ make docker-build-int8      # Build image with int8 models
 make docker-build-fp32      # Build image with fp32 models
 make docker-run-int8        # Run container with int8 models
 make docker-run-fp32        # Run container with fp32 models
+make docker-build-cuda      # Build CUDA/GPU image (fp32 models, linux/amd64)
+make docker-run-cuda        # Run CUDA/GPU container (needs --gpus all / nvidia-container-toolkit)
 
 # Release
 make release                # Build all platforms
@@ -68,7 +70,8 @@ parakeet/
 │   │   ├── mel.go          # Mel filterbank feature extraction (FFT, windowing)
 │   │   ├── audio.go        # WAV parsing, magic-byte detection, resampling to 16kHz
 │   │   ├── ffmpeg.go       # Optional ffmpeg-backed converter for non-WAV inputs
-│   │   └── audio_test.go   # Unit + concurrency tests for audio/ffmpeg logic
+│   │   ├── audio_test.go   # Unit + concurrency tests for audio/ffmpeg logic
+│   │   └── provider_test.go # Execution-provider parsing/selection tests
 │   └── server/
 │       ├── server.go       # HTTP server, route setup, lifecycle management
 │       ├── handlers.go     # API endpoint handlers, response formatting
@@ -76,7 +79,8 @@ parakeet/
 ├── models/                 # ONNX models (downloaded separately)
 ├── bin/                    # Build output directory
 ├── Makefile                # Build recipes
-├── Dockerfile              # Multi-stage container build
+├── Dockerfile              # Multi-stage container build (CPU)
+├── Dockerfile.cuda         # CUDA/GPU image (ONNX Runtime GPU build, fp32, linux/amd64)
 ├── .agents/                # AI agent documentation
 │   ├── AGENTS.md           # This file - codebase guide for agents
 │   ├── TODO.md             # Pending tasks and improvements
@@ -92,20 +96,20 @@ parakeet/
 
 ### `main.go` (Entry Point)
 
-- Parses CLI flags: `-port`, `-models`, `-log-level`, `-log-format`, `-workers`, `-ffmpeg`, `-ffmpeg-path`, `-ffmpeg-timeout`
+- Parses CLI flags: `-port`, `-models`, `-log-level`, `-log-format`, `-workers`, `-ffmpeg`, `-ffmpeg-path`, `-ffmpeg-timeout`, `-gpu`, `-gpu-device`
 - Configures `slog` global logger (text or JSON handler, four log levels)
 - Runs server in background goroutine, listens for SIGINT/SIGTERM
 - Graceful shutdown: waits up to 30s for in-flight requests via `http.Server.Shutdown`
 - Calls `srv.Close()` after shutdown to release ONNX resources
-- Default port: 5092, default models dir: `./models`, default log level: `info`, default log format: `text`, default workers: `4`, ffmpeg fallback enabled by default, ffmpeg timeout: `60s`
+- Default port: 5092, default models dir: `./models`, default log level: `info`, default log format: `text`, default workers: `4`, ffmpeg fallback enabled by default, ffmpeg timeout: `60s`, GPU provider: `cpu`, GPU device: `0`
 
 ### `internal/server/` (HTTP Server Package)
 
 #### `server.go`
 
-- `Config` struct: Port, ModelsDir, LogLevel, LogFormat, Workers, FFmpegEnabled, FFmpegPath, FFmpegTimeout
+- `Config` struct: Port, ModelsDir, LogLevel, LogFormat, Workers, FFmpegEnabled, FFmpegPath, FFmpegTimeout, GPUProvider, GPUDeviceID
 - `Server` struct: wraps config, transcriber, `http.Server`, HTTP mux, and API key
-- `New()` - Initializes transcriber with worker pool and optional ffmpeg converter, reads `PARAKEET_API_KEY` env var, and sets up routes
+- `New()` - Parses the GPU provider via `asr.ParseProvider` (fails fast on unknown values), initializes transcriber with worker pool, execution provider, and optional ffmpeg converter, reads `PARAKEET_API_KEY` env var, and sets up routes
 - `Run()` - Starts HTTP listener (blocks until shutdown or error)
 - `Shutdown(ctx)` - Graceful HTTP shutdown, waits for in-flight requests to finish
 - `Close()` - Releases transcriber and ONNX resources (must be called after Shutdown)
@@ -134,14 +138,19 @@ parakeet/
 
 - `DebugMode` - Global flag for verbose logging
 - `Config` - Model configuration (features_size, subsampling_factor)
-- `Options` - Optional knobs passed to `NewTranscriber` (currently wraps `FFmpegConfig`)
+- `Options` - Optional knobs passed to `NewTranscriber` (wraps `FFmpegConfig` and `GPUConfig`)
+- `Provider` / `ProviderCPU` / `ProviderCUDA` - Execution-provider enum
+- `ParseProvider(s)` - Normalizes a user string to a `Provider`; empty -> CPU, unknown -> error (fail loud, no silent CPU fallback)
+- `GPUConfig` - `{Provider, DeviceID}` execution-provider selection
+- `buildSessionOptions(gpu)` - Returns `*ort.SessionOptions` for the provider; `(nil, nil)` for CPU (unchanged default path), a configured object for CUDA (sets `device_id`, `cudnn_conv_algo_search=HEURISTIC`, `arena_extend_strategy=kSameAsRequested`). The single place to add future EPs.
+- `provider(gpu)` - Returns the effective provider (empty -> CPU) for logging
 - `ErrUnsupportedAudio` - Sentinel error returned when input is neither WAV nor convertible. Used by the HTTP layer to map to 400.
-- `decoderWorker` - Holds a persistent decoder ONNX session with pre-allocated reusable tensors
-- `Transcriber` - Main inference struct with a pool of `decoderWorker`s and optional `ffmpegConverter`
-- `NewTranscriber(modelsDir, workers, opts)` - Loads config, vocab, initializes ONNX Runtime, creates decoder pool and (optionally) probes ffmpeg
+- `decoderWorker` - Holds a persistent decoder ONNX session with pre-allocated reusable tensors; `newDecoderWorker` takes the shared `*ort.SessionOptions`
+- `Transcriber` - Main inference struct holding a long-lived encoder `*ort.DynamicAdvancedSession`, a pool of `decoderWorker`s, and an optional `ffmpegConverter`
+- `NewTranscriber(modelsDir, workers, opts)` - Loads config, vocab, initializes ONNX Runtime, builds execution-provider session options (owned/destroyed once all sessions exist), creates the shared encoder session and decoder pool, and (optionally) probes ffmpeg
 - `Transcribe()` - Main entry: audio -> mel -> encoder -> TDT decode -> text
 - `loadAudio()` - Detects WAV by magic bytes (RIFF/WAVE); falls back to ffmpeg conversion when available, otherwise returns `ErrUnsupportedAudio`
-- `runInference()` - Encoder ONNX session (per-request, variable shape), then acquires pool worker for decode
+- `runInference()` - Runs the shared long-lived encoder session (variable-shape tensors supplied per `Run()`), then acquires a pool worker for decode
 - `tdtDecode()` - TDT greedy decoding loop reusing pooled session and tensors
 - `tokensToText()` - Token IDs to text with cleanup
 
@@ -202,7 +211,8 @@ parakeet/
 ### ONNX Runtime Usage
 
 - Create tensors with `ort.NewTensor(shape, data)`
-- Use `ort.NewAdvancedSession()` for named inputs/outputs
+- Use `ort.NewAdvancedSession()` for fixed-binding sessions (decoder workers); `ort.NewDynamicAdvancedSession()` for the variable-shape encoder, supplying tensors to each `Run()`
+- Select the execution provider via `*ort.SessionOptions` (`nil` = default CPU). ORT copies options into each session at creation, so the options object is destroyed once after all sessions are built
 - Always call `.Destroy()` on tensors and sessions after use
 - Memory-conscious: tensors created and destroyed per inference step in decode loop
 
@@ -215,8 +225,10 @@ parakeet/
 
 | Variable           | Description                                 | Default               |
 | ------------------ | ------------------------------------------- | --------------------- |
-| `ONNXRUNTIME_LIB`  | Path to libonnxruntime.so                   | Auto-detect           |
-| `PARAKEET_API_KEY` | API key for `/v1/*` endpoint authentication | Empty (auth disabled) |
+| `ONNXRUNTIME_LIB`     | Path to libonnxruntime.so                   | Auto-detect           |
+| `PARAKEET_API_KEY`    | API key for `/v1/*` endpoint authentication | Empty (auth disabled) |
+| `PARAKEET_GPU`        | Execution provider: `cpu` or `cuda`         | `cpu`                 |
+| `PARAKEET_GPU_DEVICE` | GPU device index for `cuda`                  | `0`                   |
 
 ## Dependencies
 
@@ -243,6 +255,7 @@ No other external Go dependencies. Standard library used for HTTP, JSON, audio p
 - Builds binaries for linux/darwin/windows (amd64/arm64)
 - Creates GitHub release with checksums
 - Pushes Docker images to ghcr.io (int8 and fp32 variants)
+- `docker-cuda` job builds `Dockerfile.cuda` and pushes `*-cuda` / `latest-cuda` tags (linux/amd64 only)
 
 ### Docker Build
 
@@ -251,6 +264,7 @@ No other external Go dependencies. Standard library used for HTTP, JSON, audio p
 - Models embedded in image during build
 - Health check included
 - Exposed port: 5092
+- `Dockerfile.cuda`: NVIDIA CUDA base + GPU build of ONNX Runtime, fp32 models, linux/amd64 only. Run with `--gpus all` (nvidia-container-toolkit required).
 
 ## Common Tasks for Agents
 
@@ -261,6 +275,14 @@ No other external Go dependencies. Standard library used for HTTP, JSON, audio p
   1. Extend `isWAV`-style detection in `internal/asr/audio.go` with a new magic-byte helper.
   2. Implement a parser returning `[]float32` normalized to `[-1, 1]` at 16kHz mono.
   3. Plug it into `Transcriber.loadAudio` before the ffmpeg fallback.
+
+### Adding a New Execution Provider (e.g. TensorRT, ROCm)
+
+1. Add a `Provider` constant and accept it in `asr.ParseProvider` (`internal/asr/transcriber.go`).
+2. Add a `case` in `buildSessionOptions` that configures the EP on `*ort.SessionOptions` (mirror the CUDA branch; destroy `opts` on every error path).
+3. The encoder session and decoder pool already consume the returned options, so no call-site changes are needed.
+4. If the EP needs a different ONNX Runtime build (as CUDA does), add a Dockerfile/Makefile/release variant alongside `Dockerfile.cuda`.
+5. Record the decision in DESIGN_DECISIONS.md alongside the existing GPU provider entry.
 
 ### Modifying API Response
 
@@ -315,6 +337,13 @@ No other external Go dependencies. Standard library used for HTTP, JSON, audio p
 - Tensors must be destroyed manually (no GC)
 - The TDT decode loop creates/destroys tensors each iteration
 - Memory usage: ~2GB RAM for int8 models, ~6GB for fp32
+
+### GPU / CUDA Inference
+
+- Opt in with `-gpu cuda` (env `PARAKEET_GPU`); CPU is the default and byte-for-byte unchanged. Unknown providers or a CUDA EP that fails to init abort startup rather than falling back to CPU.
+- Requires the GPU build of ONNX Runtime and an NVIDIA driver + CUDA runtime. Use the `*-cuda` Docker image (`make docker-build-cuda` / `docker run --gpus all`); the CPU image cannot run the CUDA EP.
+- The encoder is a single long-lived session and runs in one pass, so peak VRAM scales with audio length. Very long inputs can exceed device memory and fail with an ORT allocation error. CUDA options (`cudnn_conv_algo_search=HEURISTIC`, `arena_extend_strategy=kSameAsRequested`) are set to bound this.
+- GPU images default to fp32 models (int8 targets CPU integer kernels).
 
 ### ffmpeg Conversion
 
