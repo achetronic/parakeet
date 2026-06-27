@@ -152,6 +152,51 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.precision }}
           cache-to: type=gha,mode=max,scope=${{ matrix.precision }}
 
+  docker-cuda:
+    name: Build and Push CUDA Docker Image
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ (github.event.inputs.use_master == 'true') && 'master' || (github.event.inputs.ref || github.ref) }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}},suffix=-cuda,value=${{ github.event.inputs.ref || github.ref_name }}
+            type=semver,pattern={{major}}.{{minor}},suffix=-cuda,value=${{ github.event.inputs.ref || github.ref_name }}
+            type=semver,pattern={{major}},suffix=-cuda,value=${{ github.event.inputs.ref || github.ref_name }}
+            type=raw,value=latest-cuda
+
+      # CUDA execution provider only ships for linux/amd64 (no standard ONNX
+      # Runtime arm64 GPU build), so this image is single-platform.
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.cuda
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=cuda
+          cache-to: type=gha,mode=max,scope=cuda
+
   docker-latest:
     name: Tag latest from int8
     runs-on: ubuntu-latest

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -24,6 +25,8 @@ func main() {
 	flag.BoolVar(&cfg.FFmpegEnabled, "ffmpeg", true, "Enable ffmpeg fallback for non-WAV audio (requires ffmpeg in PATH)")
 	flag.StringVar(&cfg.FFmpegPath, "ffmpeg-path", "", "Path to the ffmpeg binary (default: resolved from PATH)")
 	flag.DurationVar(&cfg.FFmpegTimeout, "ffmpeg-timeout", 60*time.Second, "Maximum wall-clock time for a single ffmpeg conversion")
+	flag.StringVar(&cfg.GPUProvider, "gpu", envOr("PARAKEET_GPU", "cpu"), "Execution provider: cpu or cuda (env: PARAKEET_GPU)")
+	flag.IntVar(&cfg.GPUDeviceID, "gpu-device", envInt("PARAKEET_GPU_DEVICE", 0), "GPU device index for cuda (env: PARAKEET_GPU_DEVICE)")
 	flag.Parse()
 
 	setupLogger(cfg.LogFormat, cfg.LogLevel)
@@ -65,6 +68,31 @@ func main() {
 
 	srv.Close()
 	slog.Info("server stopped")
+}
+
+// envOr returns the value of environment variable key, or fallback if unset.
+// Used to source a flag default from the environment so an explicit flag always
+// overrides it (flag-over-env precedence) without any extra resolution logic.
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+// envInt is envOr for integer-valued variables. A non-integer value is treated
+// as unset (after a warning) so a typo never silently selects the wrong device.
+func envInt(key string, fallback int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		slog.Warn("ignoring invalid integer environment variable", "var", key, "value", v)
+		return fallback
+	}
+	return n
 }
 
 func setupLogger(format, level string) {

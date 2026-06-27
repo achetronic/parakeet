@@ -131,7 +131,7 @@ Architectural and design decisions made in this project.
 
 **Rationale**: Eliminates ~150 session creations per request (the dominant bottleneck). The pool also provides natural backpressure: if all workers are busy, new requests block instead of spawning unconstrained concurrent inference.
 
-**Encoder**: Kept per-request because input shape varies with audio length (dynamic T dimension). The encoder runs once per request — not per timestep — so the overhead is acceptable. The model file is OS page-cached after first load.
+**Encoder**: A single long-lived session reused across requests. Input shape varies with audio length (dynamic T dimension), so freshly shaped tensors are passed to each `Run()` rather than rebuilding the session. ORT `Run()` is thread-safe on a shared session, so this is safe under the concurrent worker model. See **DD-013**, where the GPU path makes reusing the session necessary.
 
 **Consequences**:
 
@@ -191,3 +191,30 @@ Key properties:
 - `DD-004` is superseded in scope: we still support WAV in pure Go as the fast path, but we no longer reject every other format outright.
 - Concurrency semantics of DD-011 are preserved: conversions are independent per request, so `-workers N` continues to bound both decoding _and_ converter parallelism naturally.
 - OpenAI-compatibility improves: clients can upload MP3/WebM/M4A directly, matching the behavior of the real Whisper API.
+
+## DD-013: Opt-In GPU Inference via ONNX Runtime Execution Providers
+
+**Context**: Inference was CPU-only (DD-003). ONNX Runtime already supports GPU acceleration through execution providers (EPs), and the Parakeet graph runs well on the CUDA EP. We want optional GPU inference without changing or risking the CPU default that every existing deployment relies on.
+
+**Decision**: Add an opt-in execution-provider selection. `-gpu cpu|cuda` (env `PARAKEET_GPU`) chooses the provider and `-gpu-device N` (env `PARAKEET_GPU_DEVICE`) chooses the device index. Default `cpu` is byte-for-byte the previous code path. The provider is parsed once (`asr.ParseProvider`) and turned into `*ort.SessionOptions` by `asr.buildSessionOptions`, which is passed to both the encoder session and every decoder worker session.
+
+**Rationale**: A single switch keeps the surface minimal while leaving room for future EPs. Centralizing EP setup in `buildSessionOptions` means the encoder and decoder pool are configured identically, and the CPU path returns `(nil, nil)` options so it is provably unchanged.
+
+**Fail loud, don't fall back**: An unknown provider, or a CUDA EP that fails to initialize, returns an error at startup (server refuses to start) rather than silently degrading to CPU. Silent fallback would hide a misconfigured GPU box behind slow CPU inference — exactly the kind of pipeline failure that should be loud. A non-integer `PARAKEET_GPU_DEVICE` is treated as unset after a warning, so a typo can't quietly select the wrong device.
+
+**CUDA provider tuning**: The CUDA EP is configured with two non-default options, both to bound VRAM use on the single-pass encoder:
+
+- `cudnn_conv_algo_search: HEURISTIC` — the ORT default (`EXHAUSTIVE`) benchmarks every cuDNN convolution algorithm on first run and can reserve many GB of workspace for one Conv, OOMing the encoder on longer audio. `HEURISTIC` picks a good algorithm without that up-front allocation.
+- `arena_extend_strategy: kSameAsRequested` — grows the GPU arena by exactly what is requested instead of the default power-of-two steps, which would compound the above.
+
+**fp32 by default on GPU**: The CUDA image ships fp32 models. int8 quantization targets CPU integer kernels and offers little benefit on GPU, where fp32 runs natively with full accuracy and VRAM is the binding constraint rather than host RAM.
+
+**Memory ownership**: `buildSessionOptions` returns a `*ort.SessionOptions` the caller owns. ORT copies the options into each session at creation time, so `NewTranscriber` defers a single `Destroy()` that runs only after the encoder and all decoder workers exist. The shared long-lived encoder session (DD-011) is a prerequisite: rebuilding it per request would repeatedly pay CUDA context/provider setup and negate the GPU win.
+
+**Consequences**:
+
+- `-gpu`/`-gpu-device` flags and `PARAKEET_GPU`/`PARAKEET_GPU_DEVICE` env vars added; flag-over-env precedence via `envOr`/`envInt` in `main.go`.
+- A dedicated `*-cuda` Docker image (`Dockerfile.cuda`) built on an NVIDIA CUDA base with a GPU build of ONNX Runtime, fp32 models, `linux/amd64` only. Matching `make docker-build-cuda` / `make docker-run-cuda` (the latter needs `--gpus all` / nvidia-container-toolkit) and a `docker-cuda` release job publishing `*-cuda` tags to ghcr.io.
+- CPU images, CPU mode, and the int8/fp32 CPU images are unaffected.
+- **Known limitation**: the encoder runs in a single pass, so peak memory scales with audio length. On GPU this is bounded by VRAM — very long inputs can exceed device memory and fail with an ORT allocation error. Chunked/streaming encoding is the future fix.
+- Other accelerators (TensorRT, ROCm, DirectML, OpenVINO) are out of scope; `buildSessionOptions` is the single place to add them.
