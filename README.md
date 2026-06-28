@@ -268,9 +268,11 @@ docker run -d \
   ghcr.io/achetronic/parakeet:latest-cuda
 ```
 
-The CUDA image enables the GPU by default (`-gpu cuda`). For a non-Docker
-binary, or to select a specific device, use the `-gpu`/`-gpu-device` flags or
-the `PARAKEET_GPU`/`PARAKEET_GPU_DEVICE` environment variables:
+The CUDA image enables the GPU by default via `PARAKEET_GPU=cuda`, so it stays
+on the GPU even if you override the container's command with your own flags. To
+run on CPU instead, pass an explicit `-gpu cpu`. For a non-Docker binary, or to
+select a specific device, use the `-gpu`/`-gpu-device` flags or the
+`PARAKEET_GPU`/`PARAKEET_GPU_DEVICE` environment variables:
 
 ```bash
 ./parakeet -gpu cuda -gpu-device 0

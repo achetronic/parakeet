@@ -110,6 +110,8 @@ COPY --from=builder /app/parakeet /app/parakeet
 # Expose port
 EXPOSE 5092
 
-# Run with the CUDA execution provider enabled by default
+# Default to the CUDA execution provider.
+ENV PARAKEET_GPU=cuda
+
 ENTRYPOINT ["/app/parakeet"]
-CMD ["-port", "5092", "-models", "/models", "-gpu", "cuda"]
+CMD ["-port", "5092", "-models", "/models"]
