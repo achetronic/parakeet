@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 package server
 
 // TranscriptionResponse represents a simple transcription result
