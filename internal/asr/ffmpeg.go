@@ -1,4 +1,4 @@
-// Copyright 2025 - Alby Hernández and the parakeet contributors
+// SPDX-FileCopyrightText: 2026 Alby Hernández <hola@achetronic.com>
 // SPDX-License-Identifier: Apache-2.0
 
 package asr
