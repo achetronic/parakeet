@@ -188,6 +188,7 @@ type Transcriber struct {
 	maxTokensPerStep int
 	chunkFrames      int64
 	overlapFrames    int64
+	longAudio        bool
 	mel              *MelFilterbank
 	encoder          *ort.DynamicAdvancedSession
 	decoderPool      chan *decoderWorker
@@ -204,8 +205,10 @@ type Options struct {
 }
 
 // ChunkConfig sets the sliding-window sizes that keep long audio within the
-// model's frame limit. Zero values fall back to the package defaults.
+// model's frame limit. Zero values fall back to the package defaults. Enabled
+// turns on the windowing; when off, audio over the model limit is rejected.
 type ChunkConfig struct {
+	Enabled        bool
 	Seconds        int
 	OverlapSeconds int
 }
@@ -311,8 +314,11 @@ func NewTranscriber(modelsDir string, workers int, opts Options) (*Transcriber, 
 	fps := int64(t.mel.FramesPerSecond())
 	t.chunkFrames = int64(chunkSeconds) * fps
 	t.overlapFrames = int64(overlapSeconds) * fps
-	if err := validateChunking(t.chunkFrames, t.overlapFrames, int64(t.config.SubsamplingFactor)); err != nil {
-		return nil, fmt.Errorf("invalid chunk configuration: %w", err)
+	t.longAudio = opts.Chunk.Enabled
+	if t.longAudio {
+		if err := validateChunking(t.chunkFrames, t.overlapFrames, int64(t.config.SubsamplingFactor)); err != nil {
+			return nil, fmt.Errorf("invalid chunk configuration: %w", err)
+		}
 	}
 
 	// Initialize ONNX Runtime
@@ -545,10 +551,16 @@ func (t *Transcriber) transcribe(ctx context.Context, audioData []byte, format, 
 	}
 
 	subsampling := int64(t.config.SubsamplingFactor)
-	plan := planChunks(int64(len(features)), t.chunkFrames, t.overlapFrames)
+	plan, err := planForAudio(int64(len(features)), t.chunkFrames, t.overlapFrames, subsampling, t.longAudio)
+	if err != nil {
+		slog.Warn("audio exceeds the single-pass model limit; enable --long-audio to transcribe long files in overlapping chunks",
+			"seconds", float64(len(features))/float64(t.mel.FramesPerSecond()),
+			"limitSeconds", float64(modelMaxEncoderFrames*subsampling)/float64(t.mel.FramesPerSecond()))
+		return "", err
+	}
 
 	if DebugMode {
-		slog.Debug("chunk plan", "windows", len(plan), "melFrames", len(features))
+		slog.Debug("chunk plan", "windows", len(plan), "melFrames", len(features), "longAudio", t.longAudio)
 	}
 
 	var tokens []int

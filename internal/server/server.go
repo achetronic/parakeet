@@ -46,9 +46,11 @@ type Config struct {
 
 	// ChunkSeconds is the sliding-window size for long audio, in seconds.
 	// ChunkOverlapSeconds is how much consecutive windows share so words at
-	// the seams keep their context.
+	// the seams keep their context. LongAudio enables the windowing; when off,
+	// audio over the model limit is rejected instead of chunked.
 	ChunkSeconds        int
 	ChunkOverlapSeconds int
+	LongAudio           bool
 }
 
 // Server represents the HTTP server for the ASR service
@@ -82,6 +84,7 @@ func New(cfg Config) (*Server, error) {
 			DeviceID: cfg.GPUDeviceID,
 		},
 		Chunk: asr.ChunkConfig{
+			Enabled:        cfg.LongAudio,
 			Seconds:        cfg.ChunkSeconds,
 			OverlapSeconds: cfg.ChunkOverlapSeconds,
 		},

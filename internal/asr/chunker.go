@@ -3,7 +3,14 @@
 
 package asr
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
+
+// ErrAudioTooLong is returned when long-audio mode is off and the input exceeds
+// what the model can process in a single pass.
+var ErrAudioTooLong = errors.New("audio too long for a single pass; enable long-audio mode")
 
 const (
 	// DefaultChunkSeconds and DefaultChunkOverlapSeconds are the out-of-the-box
@@ -97,6 +104,21 @@ func melToEncoderFrame(melOffset, subsampling int64) int64 {
 		return melOffset
 	}
 	return melOffset / subsampling
+}
+
+// planForAudio decides how to cover a mel sequence of total frames. With long
+// audio enabled it splits into overlapping windows (planChunks). With it off it
+// returns a single full-coverage window, or ErrAudioTooLong when the input would
+// overrun the model's single-pass limit, so the caller fails cleanly instead of
+// letting the encoder crash on an out-of-range positional-encoding slice.
+func planForAudio(total, chunkFrames, overlapFrames, subsampling int64, longAudio bool) ([]chunkWindow, error) {
+	if longAudio {
+		return planChunks(total, chunkFrames, overlapFrames), nil
+	}
+	if melToEncoderFrame(total, subsampling) > modelMaxEncoderFrames {
+		return nil, ErrAudioTooLong
+	}
+	return []chunkWindow{{start: 0, end: total, emitStart: 0, emitEnd: total}}, nil
 }
 
 // validateChunking rejects window sizes that would break planChunks or overrun

@@ -4,6 +4,7 @@
 package asr
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 )
@@ -129,6 +130,58 @@ func TestValidateChunking(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPlanForAudio(t *testing.T) {
+	const (
+		subsampling = 8
+		chunk       = 30000
+		overlap     = 1500
+		// modelMaxEncoderFrames is 5000, so 5000*8 = 40000 mel frames is the
+		// single-pass ceiling.
+		underLimit = 40000
+		overLimit  = 40008
+	)
+	t.Run("long audio off, short audio, single window", func(t *testing.T) {
+		plan, err := planForAudio(underLimit, chunk, overlap, subsampling, false)
+
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(plan) != 1 || plan[0].start != 0 || plan[0].end != underLimit {
+			t.Fatalf("want one full window, got %+v", plan)
+		}
+	})
+
+	t.Run("long audio off, long audio, rejected", func(t *testing.T) {
+		_, err := planForAudio(overLimit, chunk, overlap, subsampling, false)
+
+		if !errors.Is(err, ErrAudioTooLong) {
+			t.Fatalf("want ErrAudioTooLong, got %v", err)
+		}
+	})
+
+	t.Run("long audio on, long audio, chunked", func(t *testing.T) {
+		plan, err := planForAudio(overLimit*3, chunk, overlap, subsampling, true)
+
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(plan) < 2 {
+			t.Fatalf("want multiple windows for long audio, got %d", len(plan))
+		}
+	})
+
+	t.Run("long audio on, short audio, single window", func(t *testing.T) {
+		plan, err := planForAudio(1000, chunk, overlap, subsampling, true)
+
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(plan) != 1 {
+			t.Fatalf("want one window, got %d", len(plan))
+		}
+	})
 }
 
 func TestMelToEncoderFrame(t *testing.T) {
