@@ -43,6 +43,14 @@ type Config struct {
 
 	// GPUDeviceID selects the GPU device index for GPU providers.
 	GPUDeviceID int
+
+	// ChunkSeconds is the sliding-window size for long audio, in seconds.
+	// ChunkOverlapSeconds is how much consecutive windows share so words at
+	// the seams keep their context. LongAudio enables the windowing; when off,
+	// audio over the model limit is rejected instead of chunked.
+	ChunkSeconds        int
+	ChunkOverlapSeconds int
+	LongAudio           bool
 }
 
 // Server represents the HTTP server for the ASR service
@@ -74,6 +82,11 @@ func New(cfg Config) (*Server, error) {
 		GPU: asr.GPUConfig{
 			Provider: provider,
 			DeviceID: cfg.GPUDeviceID,
+		},
+		Chunk: asr.ChunkConfig{
+			Enabled:        cfg.LongAudio,
+			Seconds:        cfg.ChunkSeconds,
+			OverlapSeconds: cfg.ChunkOverlapSeconds,
 		},
 	})
 	if err != nil {

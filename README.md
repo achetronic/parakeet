@@ -302,6 +302,9 @@ chunk_%03d.wav`) or use a CPU image, which is bounded by system RAM instead.
 | `-ffmpeg-timeout` | Maximum wall-clock time for a single ffmpeg conversion  | `60s`      | `-ffmpeg-timeout 30s`          |
 | `-gpu`            | Execution provider: `cpu` or `cuda`                     | `cpu`      | `-gpu cuda`                    |
 | `-gpu-device`     | GPU device index for `cuda`                             | `0`        | `-gpu-device 1`                |
+| `-long-audio`            | Split audio over the model limit into chunks instead of rejecting it | `false` | `-long-audio`         |
+| `-chunk-seconds`         | Sliding-window size for long audio, in seconds    | `300`      | `-chunk-seconds 240`           |
+| `-chunk-overlap-seconds` | Overlap between consecutive chunks, in seconds    | `15`       | `-chunk-overlap-seconds 10`    |
 
 **Examples:**
 
@@ -324,6 +327,15 @@ chunk_%03d.wav`) or use a CPU image, which is bounded by system RAM instead.
 # Suppress ONNX Runtime schema warnings (stderr) while keeping debug logs
 ./parakeet -log-level debug 2>&1 | grep -v "Schema error"
 ```
+
+### Long Audio
+
+The model's encoder tops out at 400 seconds of audio in a single pass. By
+default, longer input is rejected with a clear error (and a log line pointing
+here). Pass `-long-audio` to split it into overlapping windows
+(`-chunk-seconds`, `-chunk-overlap-seconds`), transcribe each, and stitch the
+results, dropping the overlap so words at the seams are not duplicated. Files
+under the chunk size are transcribed in one pass either way.
 
 ### Environment Variables
 

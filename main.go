@@ -32,6 +32,9 @@ func main() {
 	flag.DurationVar(&cfg.FFmpegTimeout, "ffmpeg-timeout", 60*time.Second, "Maximum wall-clock time for a single ffmpeg conversion")
 	flag.StringVar(&cfg.GPUProvider, "gpu", "cpu", "Execution provider: cpu or cuda")
 	flag.IntVar(&cfg.GPUDeviceID, "gpu-device", 0, "GPU device index for cuda")
+	flag.IntVar(&cfg.ChunkSeconds, "chunk-seconds", 300, "Sliding-window size in seconds for long audio (must stay under the model limit)")
+	flag.IntVar(&cfg.ChunkOverlapSeconds, "chunk-overlap-seconds", 15, "Overlap in seconds between consecutive chunks")
+	flag.BoolVar(&cfg.LongAudio, "long-audio", false, "Split audio longer than the model limit into overlapping chunks instead of rejecting it")
 	flag.Parse()
 
 	// Any flag not set on the command line falls back to its matching env var,
