@@ -334,14 +334,19 @@ chunk_%03d.wav`) or use a CPU image, which is bounded by system RAM instead.
 
 ### Environment Variables
 
+Every command-line flag also reads from an environment variable: take the flag
+name, uppercase it and replace dashes with underscores, then prefix it with
+`PARAKEET_`. So `-log-level` maps to `PARAKEET_LOG_LEVEL`, `-ffmpeg-timeout` to
+`PARAKEET_FFMPEG_TIMEOUT`, and so on. An explicit flag always overrides its env
+var (precedence: **CLI flag > env var > default**); an invalid env value is
+ignored with a warning and the default is kept.
+
+A few variables have no flag equivalent:
+
 | Variable           | Description                                 | Default               |
 | ------------------ | ------------------------------------------- | --------------------- |
-| `ONNXRUNTIME_LIB`     | Path to libonnxruntime.so                          | Auto-detected         |
-| `PARAKEET_API_KEY`    | API key for `/v1/*` endpoint authentication        | Empty (auth disabled) |
-| `PARAKEET_GPU`        | Execution provider when `-gpu` is unset: `cpu`/`cuda` | `cpu`              |
-| `PARAKEET_GPU_DEVICE` | GPU device index when `-gpu-device` is unset       | `0`                   |
-
-An explicit `-gpu`/`-gpu-device` flag always overrides the corresponding environment variable.
+| `ONNXRUNTIME_LIB`  | Path to libonnxruntime.so                   | Auto-detected         |
+| `PARAKEET_API_KEY` | API key for `/v1/*` endpoint authentication | Empty (auth disabled) |
 
 ### Model Files
 
