@@ -85,6 +85,13 @@ func (m *MelFilterbank) createMelFilterbank() [][]float64 {
 	return filterbank
 }
 
+// FramesPerSecond returns how many mel frames one second of audio yields, set
+// by the hop length and sample rate. It ties frame counts to wall-clock time
+// so chunk sizes can be configured in seconds.
+func (m *MelFilterbank) FramesPerSecond() int {
+	return m.sampleRate / m.hopLength
+}
+
 // Extract computes mel filterbank features from audio samples
 func (m *MelFilterbank) Extract(samples []float32) [][]float32 {
 	numFrames := (len(samples)-m.winLength)/m.hopLength + 1

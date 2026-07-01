@@ -186,6 +186,8 @@ type Transcriber struct {
 	vocabSize        int
 	blankIdx         int
 	maxTokensPerStep int
+	chunkFrames      int64
+	overlapFrames    int64
 	mel              *MelFilterbank
 	encoder          *ort.DynamicAdvancedSession
 	decoderPool      chan *decoderWorker
@@ -193,10 +195,19 @@ type Transcriber struct {
 }
 
 // Options groups optional knobs passed to NewTranscriber. Zero values keep
-// the previous behavior: WAV-only input, no ffmpeg conversion, CPU inference.
+// the previous behavior: WAV-only input, no ffmpeg conversion, CPU inference,
+// default chunk sizes.
 type Options struct {
 	FFmpeg FFmpegConfig
 	GPU    GPUConfig
+	Chunk  ChunkConfig
+}
+
+// ChunkConfig sets the sliding-window sizes that keep long audio within the
+// model's frame limit. Zero values fall back to the package defaults.
+type ChunkConfig struct {
+	Seconds        int
+	OverlapSeconds int
 }
 
 // buildSessionOptions returns the ONNX Runtime session options for the
@@ -286,6 +297,23 @@ func NewTranscriber(modelsDir string, workers int, opts Options) (*Transcriber, 
 
 	// Initialize mel filterbank
 	t.mel = NewMelFilterbank(t.config.FeaturesSize, 16000)
+
+	// Resolve chunk sizes (seconds to mel frames) and reject anything that
+	// would overrun the model's frame limit.
+	chunkSeconds := opts.Chunk.Seconds
+	if chunkSeconds <= 0 {
+		chunkSeconds = DefaultChunkSeconds
+	}
+	overlapSeconds := opts.Chunk.OverlapSeconds
+	if overlapSeconds < 0 {
+		overlapSeconds = DefaultChunkOverlapSeconds
+	}
+	fps := int64(t.mel.FramesPerSecond())
+	t.chunkFrames = int64(chunkSeconds) * fps
+	t.overlapFrames = int64(overlapSeconds) * fps
+	if err := validateChunking(t.chunkFrames, t.overlapFrames, int64(t.config.SubsamplingFactor)); err != nil {
+		return nil, fmt.Errorf("invalid chunk configuration: %w", err)
+	}
 
 	// Initialize ONNX Runtime
 	libPath := os.Getenv("ONNXRUNTIME_LIB")
@@ -516,9 +544,25 @@ func (t *Transcriber) transcribe(ctx context.Context, audioData []byte, format, 
 		}
 	}
 
-	tokens, err := t.runInference(ctx, features, onToken)
-	if err != nil {
-		return "", fmt.Errorf("inference failed: %w", err)
+	subsampling := int64(t.config.SubsamplingFactor)
+	plan := planChunks(int64(len(features)), t.chunkFrames, t.overlapFrames)
+
+	if DebugMode {
+		slog.Debug("chunk plan", "windows", len(plan), "melFrames", len(features))
+	}
+
+	var tokens []int
+	for _, win := range plan {
+		// Emit bounds are the window's owned region expressed in the window's
+		// local encoder frames, so tdtDecode drops the overlap it does not own.
+		emitStart := melToEncoderFrame(win.emitStart-win.start, subsampling)
+		emitEnd := melToEncoderFrame(win.emitEnd-win.start, subsampling)
+
+		windowTokens, err := t.runInference(ctx, features[win.start:win.end], emitStart, emitEnd, onToken)
+		if err != nil {
+			return "", fmt.Errorf("inference failed: %w", err)
+		}
+		tokens = append(tokens, windowTokens...)
 	}
 
 	if DebugMode {
@@ -563,7 +607,7 @@ func (t *Transcriber) loadAudio(data []byte, format string) ([]float32, error) {
 	return parseWAV(wavData)
 }
 
-func (t *Transcriber) runInference(ctx context.Context, features [][]float32, onToken func(tok int)) ([]int, error) {
+func (t *Transcriber) runInference(ctx context.Context, features [][]float32, emitStart, emitEnd int64, onToken func(tok int)) ([]int, error) {
 	batchSize := int64(1)
 	numFeatures := int64(t.config.FeaturesSize)
 	numFrames := int64(len(features))
@@ -620,10 +664,15 @@ func (t *Transcriber) runInference(ctx context.Context, features [][]float32, on
 
 	// Decoder tensors (encoderOut) must remain alive during tdtDecode.
 	// The defers above fire after tdtDecode returns, so this is safe.
-	return t.tdtDecode(ctx, encoderOut, actualEncodedLen, onToken)
+	return t.tdtDecode(ctx, encoderOut, actualEncodedLen, emitStart, emitEnd, onToken)
 }
 
-func (t *Transcriber) tdtDecode(ctx context.Context, encoderOut []float32, encodedLen int64, onToken func(tok int)) ([]int, error) {
+// tdtDecode greedily decodes the encoder output for one window. It decodes the
+// whole window so the LSTM state and previous-token feedback stay coherent, but
+// only collects and streams tokens whose timestep falls in [emitStart, emitEnd);
+// this drops the overlap region owned by an adjacent window. Pass emitStart=0
+// and emitEnd=encodedLen to keep everything.
+func (t *Transcriber) tdtDecode(ctx context.Context, encoderOut []float32, encodedLen, emitStart, emitEnd int64, onToken func(tok int)) ([]int, error) {
 	// Acquire a pre-initialized worker. Honor cancellation so a client that
 	// disconnects while all workers are busy does not leak a goroutine.
 	var w *decoderWorker
@@ -699,11 +748,15 @@ func (t *Transcriber) tdtDecode(ctx context.Context, encoderOut []float32, encod
 			// Update LSTM states for next step
 			copy(w.state1In.GetData(), w.state1Out.GetData())
 			copy(w.state2In.GetData(), w.state2Out.GetData())
-			tokens = append(tokens, token)
 			prevToken = token
 			emittedTokens++
-			if onToken != nil {
-				onToken(token)
+			// Collect and stream only tokens this window owns; the rest belong
+			// to an adjacent window's overlap and would duplicate speech.
+			if timestep >= emitStart && timestep < emitEnd {
+				tokens = append(tokens, token)
+				if onToken != nil {
+					onToken(token)
+				}
 			}
 		}
 
