@@ -81,6 +81,11 @@ RUN mkdir -p /models && \
 # Expose port
 EXPOSE 5092
 
-# Run
+# Runtime defaults as env vars, not CMD args: Docker replaces the whole CMD when
+# the user passes their own flags, so a default baked into CMD is lost on any
+# override. Every flag reads its PARAKEET_* env var, and a flag passed on the
+# command line still wins over the env var.
+ENV PARAKEET_PORT=5092
+ENV PARAKEET_MODELS=/models
+
 ENTRYPOINT ["/app/parakeet"]
-CMD ["-port", "5092", "-models", "/models"]

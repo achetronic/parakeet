@@ -233,14 +233,7 @@ services:
       - "5092:5092"
     environment:
       - PARAKEET_API_KEY=your-secret-key # optional
-    command: [
-    # ATTENTION: models location is always needed.
-    # By default is /models as they are included in that path, don't delete it unless you know exactly what you are doing :)
-      "-models", "/models",
-
-      # Tune the rest of them
-      "-workers", "2"
-    ]
+      - PARAKEET_WORKERS=2
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5092/health"]
