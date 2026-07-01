@@ -334,6 +334,9 @@ name, uppercase it and replace dashes with underscores, then prefix it with
 var (precedence: **CLI flag > env var > default**); an invalid env value is
 ignored with a warning and the default is kept.
 
+The Docker images bake their operational defaults as `PARAKEET_*` env vars, so
+they survive when you pass your own flags.
+
 A few variables have no flag equivalent:
 
 | Variable           | Description                                 | Default               |
