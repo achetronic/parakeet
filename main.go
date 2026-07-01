@@ -9,13 +9,15 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"parakeet/internal/server"
 )
+
+// envPrefix namespaces every environment variable derived from a command-line flag.
+const envPrefix = "PARAKEET_"
 
 func main() {
 	cfg := server.Config{}
@@ -28,9 +30,13 @@ func main() {
 	flag.BoolVar(&cfg.FFmpegEnabled, "ffmpeg", true, "Enable ffmpeg fallback for non-WAV audio (requires ffmpeg in PATH)")
 	flag.StringVar(&cfg.FFmpegPath, "ffmpeg-path", "", "Path to the ffmpeg binary (default: resolved from PATH)")
 	flag.DurationVar(&cfg.FFmpegTimeout, "ffmpeg-timeout", 60*time.Second, "Maximum wall-clock time for a single ffmpeg conversion")
-	flag.StringVar(&cfg.GPUProvider, "gpu", envOr("PARAKEET_GPU", "cpu"), "Execution provider: cpu or cuda (env: PARAKEET_GPU)")
-	flag.IntVar(&cfg.GPUDeviceID, "gpu-device", envInt("PARAKEET_GPU_DEVICE", 0), "GPU device index for cuda (env: PARAKEET_GPU_DEVICE)")
+	flag.StringVar(&cfg.GPUProvider, "gpu", "cpu", "Execution provider: cpu or cuda")
+	flag.IntVar(&cfg.GPUDeviceID, "gpu-device", 0, "GPU device index for cuda")
 	flag.Parse()
+
+	// Any flag not set on the command line falls back to its matching env var,
+	// e.g. --log-level -> PARAKEET_LOG_LEVEL. Precedence: CLI flag > env var > default.
+	applyEnvDefaults(flag.CommandLine)
 
 	setupLogger(cfg.LogFormat, cfg.LogLevel)
 
@@ -73,29 +79,36 @@ func main() {
 	slog.Info("server stopped")
 }
 
-// envOr returns the value of environment variable key, or fallback if unset.
-// Used to source a flag default from the environment so an explicit flag always
-// overrides it (flag-over-env precedence) without any extra resolution logic.
-func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
-}
+// applyEnvDefaults sources any flag not passed explicitly on the command line from
+// its matching environment variable, mapping the flag name to upper snake case with
+// the PARAKEET_ prefix (e.g. --log-level -> PARAKEET_LOG_LEVEL). This gives every
+// flag an env var for free, so new flags need no extra wiring. Precedence stays
+// CLI flag > env var > flag default: flags set on the CLI are skipped, and the
+// value is parsed through the flag's own type so an invalid value is rejected
+// (with a warning) instead of silently corrupting the config.
+func applyEnvDefaults(fs *flag.FlagSet) {
+	// Flags set explicitly on the CLI win and must not be overridden by env.
+	setOnCLI := make(map[string]bool)
+	fs.Visit(func(f *flag.Flag) { setOnCLI[f.Name] = true })
 
-// envInt is envOr for integer-valued variables. A non-integer value is treated
-// as unset (after a warning) so a typo never silently selects the wrong device.
-func envInt(key string, fallback int) int {
-	v := os.Getenv(key)
-	if v == "" {
-		return fallback
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil {
-		slog.Warn("ignoring invalid integer environment variable", "var", key, "value", v)
-		return fallback
-	}
-	return n
+	fs.VisitAll(func(f *flag.Flag) {
+		if setOnCLI[f.Name] {
+			return
+		}
+		key := envPrefix + strings.ToUpper(strings.ReplaceAll(f.Name, "-", "_"))
+		val, ok := os.LookupEnv(key)
+		if !ok {
+			return
+		}
+		// Snapshot the current value: flag.Value.Set clobbers numeric flags to zero
+		// even when parsing fails, so restore it on error to keep the default.
+		prev := f.Value.String()
+		if err := f.Value.Set(val); err != nil {
+			slog.Warn("ignoring invalid environment variable",
+				"var", key, "value", val, "error", err)
+			_ = f.Value.Set(prev)
+		}
+	})
 }
 
 func setupLogger(format, level string) {
