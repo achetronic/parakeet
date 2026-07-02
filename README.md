@@ -26,7 +26,6 @@
   - [Transcribe Audio](#transcribe-audio)
   - [Streaming](#streaming)
 - [Development](#development)
-- [Project Structure](#project-structure)
 - [Troubleshooting](#troubleshooting)
 - [License](#license)
 
@@ -290,24 +289,24 @@ chunk_%03d.wav`) or use a CPU image, which is bounded by system RAM instead.
 
 ### Command Line Flags
 
-| Flag              | Description                                             | Default    | Example                        |
-| ----------------- | ------------------------------------------------------- | ---------- | ------------------------------ |
-| `-port`           | HTTP server port                                        | `5092`     | `-port 8080`                   |
-| `-models`         | Path to models directory                                | `./models` | `-models /opt/parakeet/models` |
-| `-log-level`      | Log level: debug, info, warn, error                     | `info`     | `-log-level debug`             |
-| `-log-format`     | Log output format: text or json                         | `text`     | `-log-format json`             |
-| `-workers`        | Concurrent inference workers (each ~670MB RAM for int8) | `4`        | `-workers 2`                   |
-| `-ffmpeg`         | Enable ffmpeg fallback for non-WAV audio                | `true`     | `-ffmpeg=false`                |
-| `-ffmpeg-path`    | Path to the ffmpeg binary (empty = resolve from `PATH`) | ``         | `-ffmpeg-path /usr/bin/ffmpeg` |
-| `-ffmpeg-timeout` | Maximum wall-clock time for a single ffmpeg conversion  | `60s`      | `-ffmpeg-timeout 30s`          |
-| `-gpu`            | Execution provider: `cpu` or `cuda`                     | `cpu`      | `-gpu cuda`                    |
-| `-gpu-device`     | GPU device index for `cuda`                             | `0`        | `-gpu-device 1`                |
-| `-long-audio`            | Split audio over the model limit into chunks instead of rejecting it | `false` | `-long-audio`         |
-| `-chunk-seconds`         | Sliding-window size for long audio, in seconds    | `300`      | `-chunk-seconds 240`           |
-| `-chunk-overlap-seconds` | Overlap between consecutive chunks, in seconds    | `15`       | `-chunk-overlap-seconds 10`    |
-| `-disable-vad-based-chunking` | Disable the Silero VAD chunk-boundary layer (falls back to mel energy) | `false` | `-disable-vad-based-chunking` |
-| `-disable-mel-based-chunking` | Disable the mel-energy chunk-boundary layer (falls back to the midpoint) | `false` | `-disable-mel-based-chunking` |
-| `-vad-model-path`        | Path to the Silero VAD ONNX model                 | `<models>/silero_vad.onnx` | `-vad-model-path /opt/silero_vad.onnx` |
+| Flag                          | Description                                                              | Default                    | Example                                |
+| ----------------------------- | ------------------------------------------------------------------------ | -------------------------- | -------------------------------------- |
+| `-port`                       | HTTP server port                                                         | `5092`                     | `-port 8080`                           |
+| `-models`                     | Path to models directory                                                 | `./models`                 | `-models /opt/parakeet/models`         |
+| `-log-level`                  | Log level: debug, info, warn, error                                      | `info`                     | `-log-level debug`                     |
+| `-log-format`                 | Log output format: text or json                                          | `text`                     | `-log-format json`                     |
+| `-workers`                    | Concurrent inference workers (each ~670MB RAM for int8)                  | `4`                        | `-workers 2`                           |
+| `-ffmpeg`                     | Enable ffmpeg fallback for non-WAV audio                                 | `true`                     | `-ffmpeg=false`                        |
+| `-ffmpeg-path`                | Path to the ffmpeg binary (empty = resolve from `PATH`)                  | ``                         | `-ffmpeg-path /usr/bin/ffmpeg`         |
+| `-ffmpeg-timeout`             | Maximum wall-clock time for a single ffmpeg conversion                   | `60s`                      | `-ffmpeg-timeout 30s`                  |
+| `-gpu`                        | Execution provider: `cpu` or `cuda`                                      | `cpu`                      | `-gpu cuda`                            |
+| `-gpu-device`                 | GPU device index for `cuda`                                              | `0`                        | `-gpu-device 1`                        |
+| `-long-audio`                 | Split audio over the model limit into chunks instead of rejecting it     | `false`                    | `-long-audio`                          |
+| `-chunk-seconds`              | Sliding-window size for long audio, in seconds                           | `300`                      | `-chunk-seconds 240`                   |
+| `-chunk-overlap-seconds`      | Overlap between consecutive chunks, in seconds                           | `15`                       | `-chunk-overlap-seconds 10`            |
+| `-disable-vad-based-chunking` | Disable the Silero VAD chunk-boundary layer (falls back to mel energy)   | `false`                    | `-disable-vad-based-chunking`          |
+| `-disable-mel-based-chunking` | Disable the mel-energy chunk-boundary layer (falls back to the midpoint) | `false`                    | `-disable-mel-based-chunking`          |
+| `-vad-model-path`             | Path to the Silero VAD ONNX model                                        | `<models>/silero_vad.onnx` | `-vad-model-path /opt/silero_vad.onnx` |
 
 **Examples:**
 
@@ -379,13 +378,13 @@ A few variables have no flag equivalent:
 
 The following files are required in the models directory:
 
-| File                            | Size   | Description              |
-| ------------------------------- | ------ | ------------------------ |
-| `config.json`                   | 97 B   | Model configuration      |
-| `vocab.txt`                     | 94 KB  | SentencePiece vocabulary |
-| `nemo128.onnx`                  | 140 KB | Preprocessor graph       |
-| `encoder-model.int8.onnx`       | 652 MB | Quantized encoder        |
-| `decoder_joint-model.int8.onnx` | 18 MB  | Quantized TDT decoder    |
+| File                            | Size   | Description                                              |
+| ------------------------------- | ------ | -------------------------------------------------------- |
+| `config.json`                   | 97 B   | Model configuration                                      |
+| `vocab.txt`                     | 94 KB  | SentencePiece vocabulary                                 |
+| `nemo128.onnx`                  | 140 KB | Preprocessor graph                                       |
+| `encoder-model.int8.onnx`       | 652 MB | Quantized encoder                                        |
+| `decoder_joint-model.int8.onnx` | 18 MB  | Quantized TDT decoder                                    |
 | `silero_vad.onnx`               | 2.3 MB | Silero VAD (chunk boundaries, long-audio only; optional) |
 
 For full precision models, use `encoder-model.onnx` (requires `encoder-model.onnx.data`, 2.5GB total) and `decoder_joint-model.onnx` (72MB).
@@ -566,31 +565,6 @@ make test
 # With coverage
 make test-coverage
 open coverage.html
-```
-
-## Project Structure
-
-```
-parakeet/
-├── main.go                 # Entry point, CLI flags, logger setup
-├── internal/
-│   ├── asr/
-│   │   ├── transcriber.go  # ONNX inference pipeline
-│   │   ├── mel.go          # Mel filterbank feature extraction
-│   │   └── audio.go        # WAV parsing and resampling
-│   └── server/
-│       ├── server.go       # HTTP server, auth middleware, lifecycle
-│       ├── handlers.go     # API endpoint handlers
-│       └── types.go        # Request/response type definitions
-├── models/                 # ONNX models (not in repository)
-├── .agents/                # AI agent documentation
-├── Dockerfile
-├── Makefile
-├── .github/
-│   └── workflows/
-│       ├── ci.yaml         # CI pipeline
-│       └── release.yaml    # Release pipeline
-└── README.md
 ```
 
 ## Troubleshooting
