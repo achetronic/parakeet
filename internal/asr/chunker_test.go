@@ -184,6 +184,103 @@ func TestPlanForAudio(t *testing.T) {
 	})
 }
 
+// planChunksWithBoundaries must honour an oracle's boundary when it is inside
+// the overlap and clamp it into the legal range otherwise, while keeping the
+// tiling invariant for ANY oracle output.
+func TestPlanChunksWithBoundaries_HonoursAndClampsOracle(t *testing.T) {
+	// Windows for planChunks(100,40,10): starts 0,30,60 ends 40,70,100.
+	// Overlaps: [30,40) mid 35, and [60,70) mid 65.
+	t.Run("in-range boundaries honoured", func(t *testing.T) {
+		oracle := funcOracle{decide: func(r overlapRegion) (int64, bool) {
+			if r.start == 30 {
+				return 32, true
+			}
+			return 68, true
+		}}
+		got := planChunksWithBoundaries(100, 40, 10, oracle)
+		want := []chunkWindow{
+			{start: 0, end: 40, emitStart: 0, emitEnd: 32},
+			{start: 30, end: 70, emitStart: 32, emitEnd: 68},
+			{start: 60, end: 100, emitStart: 68, emitEnd: 100},
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("got %+v, want %+v", got, want)
+		}
+	})
+
+	t.Run("out-of-range boundaries clamped into overlap", func(t *testing.T) {
+		oracle := funcOracle{decide: func(r overlapRegion) (int64, bool) {
+			if r.start == 30 {
+				return -1000, true // below overlapStart -> clamp to 30
+			}
+			return 1000, true // above overlapEnd -> clamp to 70
+		}}
+		got := planChunksWithBoundaries(100, 40, 10, oracle)
+		want := []chunkWindow{
+			{start: 0, end: 40, emitStart: 0, emitEnd: 30},
+			{start: 30, end: 70, emitStart: 30, emitEnd: 70},
+			{start: 60, end: 100, emitStart: 70, emitEnd: 100},
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("got %+v, want %+v", got, want)
+		}
+	})
+}
+
+// The tiling invariant must hold for arbitrary and adversarial oracles: the emit
+// ranges tile [0,total) with no gap or overlap and stay inside their windows,
+// no matter what the oracle returns.
+func TestPlanChunksWithBoundaries_TilingInvariantArbitraryOracle(t *testing.T) {
+	oracles := map[string]boundaryOracle{
+		"nil (midpoint)":    nil,
+		"always zero":       funcOracle{decide: func(overlapRegion) (int64, bool) { return 0, true }},
+		"always huge":       funcOracle{decide: func(overlapRegion) (int64, bool) { return 1 << 40, true }},
+		"always negative":   funcOracle{decide: func(overlapRegion) (int64, bool) { return -1 << 40, true }},
+		"always decline":    funcOracle{decide: func(overlapRegion) (int64, bool) { return 0, false }},
+		"overlap start-ish": funcOracle{decide: func(r overlapRegion) (int64, bool) { return r.start + 1, true }},
+		"overlap end-ish":   funcOracle{decide: func(r overlapRegion) (int64, bool) { return r.end - 1, true }},
+	}
+	cases := []struct {
+		name          string
+		total         int64
+		chunkFrames   int64
+		overlapFrames int64
+	}{
+		{"even multiple", 90, 40, 10},
+		{"one over chunk", 4001, 4000, 500},
+		{"large overlap", 100, 40, 35},
+		{"no overlap", 100, 40, 0},
+		{"many windows", 100000, 30000, 1500},
+	}
+	for oname, oracle := range oracles {
+		for _, tc := range cases {
+			t.Run(oname+"/"+tc.name, func(t *testing.T) {
+				windows := planChunksWithBoundaries(tc.total, tc.chunkFrames, tc.overlapFrames, oracle)
+				if len(windows) == 0 {
+					t.Fatal("no windows produced")
+				}
+				if windows[0].emitStart != 0 {
+					t.Errorf("first emitStart = %d, want 0", windows[0].emitStart)
+				}
+				if last := windows[len(windows)-1]; last.emitEnd != tc.total {
+					t.Errorf("last emitEnd = %d, want %d", last.emitEnd, tc.total)
+				}
+				for i, w := range windows {
+					if w.emitStart > w.emitEnd {
+						t.Errorf("window %d has emitStart %d > emitEnd %d", i, w.emitStart, w.emitEnd)
+					}
+					if w.start > w.emitStart || w.emitEnd > w.end {
+						t.Errorf("window %d emit range [%d,%d) not inside window [%d,%d)", i, w.emitStart, w.emitEnd, w.start, w.end)
+					}
+					if i > 0 && windows[i-1].emitEnd != w.emitStart {
+						t.Errorf("gap/overlap between window %d emitEnd %d and window %d emitStart %d", i-1, windows[i-1].emitEnd, i, w.emitStart)
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestMelToEncoderFrame(t *testing.T) {
 	tests := []struct {
 		name        string

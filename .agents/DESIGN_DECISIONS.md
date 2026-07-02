@@ -218,3 +218,57 @@ Key properties:
 - CPU images, CPU mode, and the int8/fp32 CPU images are unaffected.
 - **Known limitation**: the encoder runs in a single pass, so peak memory scales with audio length. On GPU this is bounded by VRAM — very long inputs can exceed device memory and fail with an ORT allocation error. Chunked/streaming encoding is the future fix.
 - Other accelerators (TensorRT, ROCm, DirectML, OpenVINO) are out of scope; `buildSessionOptions` is the single place to add them.
+
+## DD-014: VAD-Aware Chunk Boundaries and Seam Token Dedup
+
+**Context**: Long-audio mode (PR #21) covers audio longer than the model's 5000 encoder-frame limit with overlapping windows and splits ownership of each overlap at its arithmetic MIDPOINT (`chunker.go`). Because the midpoint is blind to content it often lands mid-word. Each window timestamps tokens slightly differently, so a word straddling the boundary is emitted twice (duplicates like "to to") or by neither window (drops like "for., and how"). Issue #18 reproduces this on a ~30 minute file.
+
+**Decision**: Move the boundary onto silence with a three-layer cascade, and add an always-on seam-level token dedup as a second safety net. Both operate only within the existing overlaps; the mission stays faithful to Parakeet TDT (no global segmentation, no silence skipping).
+
+### Boundary selection cascade (interface-based oracles)
+
+A `boundaryOracle` interface (`boundary.go`) picks the mel-frame split inside an overlap. The three implementations are alternative strategies for the same contract, tried in order by `chainBoundaryOracle`:
+
+1. `vadBoundaryOracle`: runs Silero VAD over the overlap's waveform and picks the CENTER of the LONGEST run of 32 ms windows whose speech probability is below `vadSilenceThreshold` (0.4, a tuned constant in the agreed 0.35-0.5 band, NOT a flag). Silero's state is reset per overlap, so its first ~1 s is warmup (`vadWarmupWindows`); a boundary after the warmup is preferred, falling back to the warmup region only if no later silence exists. Declines (falls through) when nothing is below the threshold.
+2. `melEnergyBoundaryOracle`: smooths per-frame energy from the already-extracted mel features (`melSmoothingFrames` ~150 ms) and returns the quietest frame in the overlap. Always decides when it has features, so it is the robust fallback when the VAD is disabled or its model is missing.
+3. `midpointBoundaryOracle`: the arithmetic midpoint, the pre-#18 behaviour. Always decides, so the result is never worse than before.
+
+`planChunksWithBoundaries` takes the oracle and CLAMPS whatever it returns into the legal overlap range, keeping the tiling invariant (`emitEnd[i] == emitStart[i+1]`, first `emitStart` 0, last `emitEnd` total, each emit range inside its window) for ANY oracle output. `planChunks` is now the nil-oracle (pure-midpoint) case, so the existing canary tests are unchanged.
+
+**Why an interface**: the three layers are genuinely interchangeable implementations of one decision, and the cascade is just "try each until one decides". An interface makes each layer independently unit-testable from synthetic probability/energy arrays and lets the disable flags drop layers by simply not adding them to the chain.
+
+**Why VAD only on overlaps**: the overlaps are short (15 s each by default), so the VAD cost is bounded and proportional to the number of seams, not the file length. Running Silero over the whole file would be the first step towards VAD segmentation, which this project deliberately rejects.
+
+### Silero VAD integration
+
+- Model file `silero_vad.onnx` lives in the `--models` directory like the other models, downloaded by the Makefile and Docker builds (NOT embedded in the binary). Pinned to release **v6.2.1** (MIT) with sha256 `1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3`, verified with `sha256sum -c` at download time. NOTE: at v6.2.1 the ONNX file is at `src/silero_vad/data/silero_vad.onnx`; the older `files/silero_vad.onnx` path no longer exists.
+- One shared `DynamicAdvancedSession`, same pattern as the encoder (DD-011). Silero is stateful, but its recurrent state travels through the `state`/`stateN` TENSORS per call, not inside the session, so a single session is safe under concurrency as long as each request keeps its own `vadState`. The loop feeds 512-sample (32 ms) windows sequentially, prepending a 64-sample context and carrying the state between calls; v5+ uses the combined `state` tensor plus an `sr` sample-rate input, verified against the pinned model.
+- **Missing model is not fatal**: `slog.Warn` once at startup ("VAD model not found, chunk boundaries fall back to mel energy") and degrade to the mel layer. Any other load error is fatal so a corrupt model surfaces loudly.
+- **Concurrency caveat**: like the encoder, the VAD session runs OUTSIDE the decoder worker pool, so its concurrency is bounded by the number of in-flight HTTP requests, not by `-workers`.
+
+### Seam token dedup (always on, no flag)
+
+Operating on emitted tokens tagged with their ABSOLUTE encoder-frame timesteps (`decodedToken`, `seam.go`), `dedupSeam` drops a leading token of window i+1 when its timestep is within `seamTimestepToleranceFrames` (3 frames, ~240 ms) of any of window i's last `seamMaxTokens` (3) tokens. One rule covers both #18 failure modes: same text at the same position is a duplicate; different text at the same position is a collision that window i WINS (its LSTM reaches the seam fully warmed up while window i+1 is still warming). A duplicate further apart than the tolerance is kept. All tolerances are named constants with comments, not flags.
+
+**Streaming**: `TranscribeStream` emits deltas as tokens are produced. To let dedup run before window i+1's head reaches the client, `tdtDecode` BUFFERS at most the first `seamMaxTokens` owned tokens of each window after the first, resolves them through the deduper, streams the survivors in order, then streams the rest as it decodes. Buffering is minimal (a handful of tokens per seam) and streaming order is preserved.
+
+### Rejected alternatives
+
+- **LCS / sequence stitching** of overlapping transcripts: fragile on repeated words, needs a similarity threshold that is itself a tuning knob, and operates on text after the timing information that actually identifies the seam has been thrown away. Placing the boundary on silence removes the ambiguity at the source; the timestep-based dedup is a cheap, deterministic backstop.
+- **Full-file VAD segmentation**: would skip silence and re-segment globally, changing what audio Parakeet sees and breaking faithfulness to the model. Out of scope by mission.
+
+### Known limitation
+
+Loud or dynamic music has no quiet frame, so the mel-energy layer degrades to roughly midpoint quality; the VAD layer is the robust answer there because it distinguishes speech from non-speech energy rather than loud from quiet. With the VAD disabled AND music present, boundaries fall back to the midpoint, i.e. the pre-#18 behaviour.
+
+**Configuration surface** (env vars come free via `applyEnvDefaults`):
+
+- `--disable-vad-based-chunking` (bool, default false): drops layer 1.
+- `--disable-mel-based-chunking` (bool, default false): drops layer 2.
+- `--vad-model-path` (string, default `silero_vad.onnx` inside `--models`).
+
+**Consequences**:
+
+- New files: `internal/asr/boundary.go` (oracle stack), `internal/asr/vad.go` (Silero session), `internal/asr/seam.go` (dedup). `chunker.go` gains `planChunksWithBoundaries`/`planForAudioWithBoundaries`; `transcriber.go` threads absolute timesteps, the seam buffer, and the per-request oracle chain.
+- `silero_vad.onnx` is a new required-for-VAD model file; its absence is a graceful degrade, not a failure.
+- Reference reproduction material (the issue #18 MP3 plus `.srt`/`.vtt`/`.txt`) lives in `testdata/reference/`, with a build-tag-gated Go seam inspector (`-tags=seaminspect`) that prints transcribed vs reference text around every seam. No Python, no network.

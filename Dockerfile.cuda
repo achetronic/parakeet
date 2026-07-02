@@ -64,6 +64,12 @@ FROM ${CUDA_RUNTIME_IMAGE}
 ARG MODEL_PRECISION=fp32
 ARG ONNXRUNTIME_VERSION
 
+# Silero VAD model for chunk-boundary selection (long-audio mode). Pinned tag +
+# sha256 so the image build is reproducible and verified. snakers4/silero-vad is
+# MIT licensed. At v6.2.1 the ONNX file lives at src/silero_vad/data/.
+ARG SILERO_VAD_VERSION=v6.2.1
+ARG SILERO_VAD_SHA256=1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3
+
 # Install ONNX Runtime GPU build and ffmpeg (used for non-WAV audio conversion)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
@@ -92,6 +98,8 @@ RUN mkdir -p /models && \
     curl -L -o /models/config.json "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/config.json" && \
     curl -L -o /models/vocab.txt "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/vocab.txt" && \
     curl -L -o /models/nemo128.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/nemo128.onnx" && \
+    curl -L -o /models/silero_vad.onnx "https://github.com/snakers4/silero-vad/raw/${SILERO_VAD_VERSION}/src/silero_vad/data/silero_vad.onnx" && \
+    echo "${SILERO_VAD_SHA256}  /models/silero_vad.onnx" | sha256sum -c - && \
     if [ "$MODEL_PRECISION" = "int8" ]; then \
         curl -L -o /models/encoder-model.int8.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/encoder-model.int8.onnx" && \
         curl -L -o /models/decoder_joint-model.int8.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/decoder_joint-model.int8.onnx"; \

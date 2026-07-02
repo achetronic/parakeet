@@ -92,6 +92,13 @@ func (m *MelFilterbank) FramesPerSecond() int {
 	return m.sampleRate / m.hopLength
 }
 
+// HopLength returns the hop between mel frames in samples. It maps a mel-frame
+// index to a sample offset (frame * hopLength), which the VAD boundary oracle
+// uses to slice the waveform for an overlap region.
+func (m *MelFilterbank) HopLength() int {
+	return m.hopLength
+}
+
 // Extract computes mel filterbank features from audio samples
 func (m *MelFilterbank) Extract(samples []float32) [][]float32 {
 	numFrames := (len(samples)-m.winLength)/m.hopLength + 1

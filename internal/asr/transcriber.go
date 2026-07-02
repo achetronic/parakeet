@@ -181,27 +181,31 @@ type GPUConfig struct {
 }
 
 type Transcriber struct {
-	config           Config
-	vocab            map[int]string
-	vocabSize        int
-	blankIdx         int
-	maxTokensPerStep int
-	chunkFrames      int64
-	overlapFrames    int64
-	longAudio        bool
-	mel              *MelFilterbank
-	encoder          *ort.DynamicAdvancedSession
-	decoderPool      chan *decoderWorker
-	ffmpeg           *ffmpegConverter
+	config             Config
+	vocab              map[int]string
+	vocabSize          int
+	blankIdx           int
+	maxTokensPerStep   int
+	chunkFrames        int64
+	overlapFrames      int64
+	longAudio          bool
+	disableVADChunking bool
+	disableMelChunking bool
+	mel                *MelFilterbank
+	encoder            *ort.DynamicAdvancedSession
+	vad                *sileroVAD
+	decoderPool        chan *decoderWorker
+	ffmpeg             *ffmpegConverter
 }
 
 // Options groups optional knobs passed to NewTranscriber. Zero values keep
 // the previous behavior: WAV-only input, no ffmpeg conversion, CPU inference,
-// default chunk sizes.
+// default chunk sizes, and the full boundary stack (VAD then mel then midpoint).
 type Options struct {
-	FFmpeg FFmpegConfig
-	GPU    GPUConfig
-	Chunk  ChunkConfig
+	FFmpeg   FFmpegConfig
+	GPU      GPUConfig
+	Chunk    ChunkConfig
+	Boundary BoundaryConfig
 }
 
 // ChunkConfig sets the sliding-window sizes that keep long audio within the
@@ -211,6 +215,17 @@ type ChunkConfig struct {
 	Enabled        bool
 	Seconds        int
 	OverlapSeconds int
+}
+
+// BoundaryConfig tunes how the emission boundary inside each chunk overlap is
+// chosen. By default the cascade is VAD -> mel energy -> midpoint;
+// the disable flags drop the earlier layers so the cascade falls through to the
+// next one. VADModelPath points at the Silero VAD ONNX file; when empty the
+// caller resolves it to silero_vad.onnx inside the models directory.
+type BoundaryConfig struct {
+	DisableVAD   bool
+	DisableMel   bool
+	VADModelPath string
 }
 
 // buildSessionOptions returns the ONNX Runtime session options for the
@@ -315,6 +330,8 @@ func NewTranscriber(modelsDir string, workers int, opts Options) (*Transcriber, 
 	t.chunkFrames = int64(chunkSeconds) * fps
 	t.overlapFrames = int64(overlapSeconds) * fps
 	t.longAudio = opts.Chunk.Enabled
+	t.disableVADChunking = opts.Boundary.DisableVAD
+	t.disableMelChunking = opts.Boundary.DisableMel
 	if t.longAudio {
 		if err := validateChunking(t.chunkFrames, t.overlapFrames, int64(t.config.SubsamplingFactor)); err != nil {
 			return nil, fmt.Errorf("invalid chunk configuration: %w", err)
@@ -407,12 +424,36 @@ func NewTranscriber(modelsDir string, workers int, opts Options) (*Transcriber, 
 		t.decoderPool <- w
 	}
 
+	// Load the Silero VAD model for chunk-boundary selection. It is only useful
+	// when long-audio windowing is on, and only when the VAD layer is enabled.
+	// A missing model file is not fatal: warn once and let the boundary stack
+	// fall back to mel energy. Any other load error is fatal so a
+	// corrupt model surfaces loudly at startup.
+	if t.longAudio && !t.disableVADChunking {
+		vadPath := opts.Boundary.VADModelPath
+		if vadPath == "" {
+			vadPath = filepath.Join(modelsDir, "silero_vad.onnx")
+		}
+		vad, err := newSileroVAD(vadPath, sessOpts)
+		switch {
+		case err == nil:
+			t.vad = vad
+		case os.IsNotExist(err):
+			slog.Warn("VAD model not found, chunk boundaries fall back to mel energy",
+				"path", vadPath)
+		default:
+			t.Close()
+			return nil, fmt.Errorf("failed to load Silero VAD model: %w", err)
+		}
+	}
+
 	slog.Info("transcriber initialized",
 		"workers", workers,
 		"provider", string(provider(opts.GPU)),
 		"encoder", filepath.Base(encoderPath),
 		"decoder", filepath.Base(decoderPath),
 		"vocabSize", t.vocabSize,
+		"vad", t.vad != nil,
 	)
 
 	return t, nil
@@ -467,6 +508,10 @@ func (t *Transcriber) Close() {
 	if t.encoder != nil {
 		t.encoder.Destroy()
 		t.encoder = nil
+	}
+	if t.vad != nil {
+		t.vad.destroy()
+		t.vad = nil
 	}
 	if t.decoderPool != nil {
 		close(t.decoderPool)
@@ -528,30 +573,12 @@ func (t *Transcriber) transcribe(ctx context.Context, audioData []byte, format, 
 		slog.Debug("mel features extracted", "frames", len(features), "featuresPerFrame", len(features[0]))
 	}
 
-	// Build a token-level callback that converts each emitted token into a
-	// printable text delta, skipping special <...> tokens. Streaming is
-	// purely additive: callers get the same text whether or not emit is set.
-	var onToken func(tok int)
-	if emit != nil {
-		onToken = func(tok int) {
-			text, ok := t.vocab[tok]
-			if !ok {
-				return
-			}
-			if strings.HasPrefix(text, "<") && strings.HasSuffix(text, ">") {
-				return
-			}
-			// vocab values already have word-boundary marks (U+2581) translated
-			// to spaces at load time (see loadVocab), so the token text is emitted
-			// as-is. Clients accumulate deltas to render text live.
-			if text != "" {
-				emit(text)
-			}
-		}
-	}
-
 	subsampling := int64(t.config.SubsamplingFactor)
-	plan, err := planForAudio(int64(len(features)), t.chunkFrames, t.overlapFrames, subsampling, t.longAudio)
+	// Build the boundary oracle cascade (VAD -> mel energy -> midpoint) over this
+	// request's data and plan the chunk windows with it. When long-audio is off
+	// the oracle is unused (single window or ErrAudioTooLong).
+	oracle := t.newBoundaryOracle(features, waveform)
+	plan, err := planForAudioWithBoundaries(int64(len(features)), t.chunkFrames, t.overlapFrames, subsampling, t.longAudio, oracle)
 	if err != nil {
 		slog.Warn("audio exceeds the single-pass model limit; enable --long-audio to transcribe long files in overlapping chunks",
 			"seconds", float64(len(features))/float64(t.mel.FramesPerSecond()),
@@ -563,25 +590,66 @@ func (t *Transcriber) transcribe(ctx context.Context, audioData []byte, format, 
 		slog.Debug("chunk plan", "windows", len(plan), "melFrames", len(features), "longAudio", t.longAudio)
 	}
 
-	var tokens []int
-	for _, win := range plan {
+	// Decode window by window. Adjacent windows share an overlap, so window i+1's
+	// first few tokens are held and compared against window i's tail before they
+	// are emitted, dropping seam duplicates and letting the earlier (warmed-up)
+	// window win text collisions. Held tokens are released in order
+	// before the rest of the window streams, so streaming order is preserved.
+	var tokens []decodedToken
+	var prevTail []decodedToken
+	for i, win := range plan {
 		// Emit bounds are the window's owned region expressed in the window's
 		// local encoder frames, so tdtDecode drops the overlap it does not own.
 		emitStart := melToEncoderFrame(win.emitStart-win.start, subsampling)
 		emitEnd := melToEncoderFrame(win.emitEnd-win.start, subsampling)
+		// frameOffset turns per-window local timesteps into absolute encoder
+		// frames so the seam deduper can align tokens across windows.
+		frameOffset := melToEncoderFrame(win.start, subsampling)
 
-		windowTokens, err := t.runInference(ctx, features[win.start:win.end], emitStart, emitEnd, onToken)
+		holdFirst := 0
+		var resolveSeam func(head []decodedToken) []decodedToken
+		if i > 0 {
+			holdFirst = seamMaxTokens
+			tail := prevTail
+			resolveSeam = func(head []decodedToken) []decodedToken {
+				return dedupSeam(tail, head)
+			}
+		}
+
+		windowTokens, err := t.runInference(ctx, features[win.start:win.end], emitStart, emitEnd, frameOffset, holdFirst, resolveSeam, emit)
 		if err != nil {
 			return "", fmt.Errorf("inference failed: %w", err)
 		}
 		tokens = append(tokens, windowTokens...)
+		prevTail = windowTokens
 	}
 
 	if DebugMode {
-		slog.Debug("tokens decoded", "count", len(tokens), "tokens", tokens)
+		slog.Debug("tokens decoded", "count", len(tokens))
 	}
 
 	return t.tokensToText(tokens), nil
+}
+
+// newBoundaryOracle builds the per-request chunk-boundary cascade over this
+// request's mel features and waveform: Silero VAD first (when enabled and the
+// model loaded), then smoothed mel energy (when enabled), then the arithmetic
+// midpoint as the always-decides fallback.
+func (t *Transcriber) newBoundaryOracle(features [][]float32, waveform []float32) boundaryOracle {
+	var oracles []boundaryOracle
+	if !t.disableVADChunking && t.vad != nil {
+		oracles = append(oracles, &vadBoundaryOracle{
+			vad:       t.vad,
+			state:     &vadState{},
+			waveform:  waveform,
+			hopLength: int64(t.mel.HopLength()),
+		})
+	}
+	if !t.disableMelChunking {
+		oracles = append(oracles, newMelEnergyBoundaryOracle(features))
+	}
+	oracles = append(oracles, midpointBoundaryOracle{})
+	return chainBoundaryOracle{oracles: oracles}
 }
 
 // loadAudio decodes raw request bytes into mono 16 kHz float32 samples.
@@ -619,7 +687,7 @@ func (t *Transcriber) loadAudio(data []byte, format string) ([]float32, error) {
 	return parseWAV(wavData)
 }
 
-func (t *Transcriber) runInference(ctx context.Context, features [][]float32, emitStart, emitEnd int64, onToken func(tok int)) ([]int, error) {
+func (t *Transcriber) runInference(ctx context.Context, features [][]float32, emitStart, emitEnd, frameOffset int64, holdFirst int, resolveSeam func(head []decodedToken) []decodedToken, emit func(delta string)) ([]decodedToken, error) {
 	batchSize := int64(1)
 	numFeatures := int64(t.config.FeaturesSize)
 	numFrames := int64(len(features))
@@ -676,7 +744,7 @@ func (t *Transcriber) runInference(ctx context.Context, features [][]float32, em
 
 	// Decoder tensors (encoderOut) must remain alive during tdtDecode.
 	// The defers above fire after tdtDecode returns, so this is safe.
-	return t.tdtDecode(ctx, encoderOut, actualEncodedLen, emitStart, emitEnd, onToken)
+	return t.tdtDecode(ctx, encoderOut, actualEncodedLen, emitStart, emitEnd, frameOffset, holdFirst, resolveSeam, emit)
 }
 
 // tdtDecode greedily decodes the encoder output for one window. It decodes the
@@ -684,7 +752,14 @@ func (t *Transcriber) runInference(ctx context.Context, features [][]float32, em
 // only collects and streams tokens whose timestep falls in [emitStart, emitEnd);
 // this drops the overlap region owned by an adjacent window. Pass emitStart=0
 // and emitEnd=encodedLen to keep everything.
-func (t *Transcriber) tdtDecode(ctx context.Context, encoderOut []float32, encodedLen, emitStart, emitEnd int64, onToken func(tok int)) ([]int, error) {
+//
+// Owned tokens are tagged with an absolute encoder-frame timestep (local
+// timestep + frameOffset). When holdFirst > 0 the first holdFirst owned tokens
+// are buffered and passed to resolveSeam (the seam deduper) before being
+// emitted; the survivors are streamed in order, then the rest of the window
+// streams as it is decoded. This keeps streaming order correct while buffering
+// only a handful of tokens per seam.
+func (t *Transcriber) tdtDecode(ctx context.Context, encoderOut []float32, encodedLen, emitStart, emitEnd, frameOffset int64, holdFirst int, resolveSeam func(head []decodedToken) []decodedToken, emit func(delta string)) ([]decodedToken, error) {
 	// Acquire a pre-initialized worker. Honor cancellation so a client that
 	// disconnects while all workers are busy does not leak a goroutine.
 	var w *decoderWorker
@@ -714,10 +789,36 @@ func (t *Transcriber) tdtDecode(ctx context.Context, encoderOut []float32, encod
 		s2[i] = 0
 	}
 
-	var tokens []int
+	var result []decodedToken
+	var head []decodedToken
+	resolved := holdFirst <= 0
 	timestep := int64(0)
 	emittedTokens := 0
 	prevToken := t.blankIdx
+
+	// emitText streams one token's printable text, skipping special <...> tokens.
+	emitText := func(id int) {
+		if emit == nil {
+			return
+		}
+		if text := t.tokenText(id); text != "" {
+			emit(text)
+		}
+	}
+	// flushHead resolves the buffered seam head through the deduper and streams
+	// the survivors in order, then marks the seam resolved.
+	flushHead := func() {
+		survivors := head
+		if resolveSeam != nil {
+			survivors = resolveSeam(head)
+		}
+		for _, s := range survivors {
+			result = append(result, s)
+			emitText(s.id)
+		}
+		head = nil
+		resolved = true
+	}
 
 	encOutData := w.encOut.GetData()
 
@@ -765,9 +866,17 @@ func (t *Transcriber) tdtDecode(ctx context.Context, encoderOut []float32, encod
 			// Collect and stream only tokens this window owns; the rest belong
 			// to an adjacent window's overlap and would duplicate speech.
 			if timestep >= emitStart && timestep < emitEnd {
-				tokens = append(tokens, token)
-				if onToken != nil {
-					onToken(token)
+				dt := decodedToken{id: token, timestep: frameOffset + timestep}
+				if resolved {
+					result = append(result, dt)
+					emitText(dt.id)
+				} else {
+					// Hold the window's leading tokens for the seam deduper. Once
+					// holdFirst are buffered, resolve and start streaming again.
+					head = append(head, dt)
+					if len(head) >= holdFirst {
+						flushHead()
+					}
 				}
 			}
 		}
@@ -776,7 +885,10 @@ func (t *Transcriber) tdtDecode(ctx context.Context, encoderOut []float32, encod
 		// or an expired deadline frees the worker promptly.
 		select {
 		case <-ctx.Done():
-			return tokens, ctx.Err()
+			if !resolved {
+				flushHead()
+			}
+			return result, ctx.Err()
 		default:
 		}
 
@@ -789,7 +901,13 @@ func (t *Transcriber) tdtDecode(ctx context.Context, encoderOut []float32, encod
 		}
 	}
 
-	return tokens, nil
+	// The window ended before holdFirst tokens were seen: resolve whatever the
+	// seam head holds (possibly empty) so nothing is left buffered.
+	if !resolved {
+		flushHead()
+	}
+
+	return result, nil
 }
 
 func argmax(data []float32) int {
@@ -807,13 +925,25 @@ func argmax(data []float32) int {
 	return maxIdx
 }
 
-func (t *Transcriber) tokensToText(tokens []int) string {
+// tokenText returns the printable text for a token id, or "" for unknown tokens
+// and special <...> markers. vocab values already have word-boundary marks
+// (U+2581) translated to spaces at load time (see loadVocab), so the text is
+// returned as-is.
+func (t *Transcriber) tokenText(id int) string {
+	text, ok := t.vocab[id]
+	if !ok {
+		return ""
+	}
+	if strings.HasPrefix(text, "<") && strings.HasSuffix(text, ">") {
+		return ""
+	}
+	return text
+}
+
+func (t *Transcriber) tokensToText(tokens []decodedToken) string {
 	var parts []string
 	for _, tok := range tokens {
-		if text, ok := t.vocab[tok]; ok {
-			if strings.HasPrefix(text, "<") && strings.HasSuffix(text, ">") {
-				continue
-			}
+		if text := t.tokenText(tok.id); text != "" {
 			parts = append(parts, text)
 		}
 	}

@@ -29,6 +29,7 @@ make run-dev                # Run with custom port (5092) for development
 make models                 # Download int8 models (default, ~670MB)
 make models-int8            # Download int8 quantized models
 make models-fp32            # Download full precision models (~2.5GB)
+make models-silero-vad      # Download + verify the Silero VAD model (MIT, pinned)
 
 # Test
 make test                   # Run tests
@@ -67,6 +68,10 @@ parakeet/
 ├── internal/
 │   ├── asr/
 │   │   ├── transcriber.go  # ONNX inference pipeline, TDT decoding
+│   │   ├── chunker.go      # Long-audio window planning + VAD/mel/midpoint boundaries
+│   │   ├── boundary.go     # Chunk-boundary oracle cascade (VAD -> mel energy -> midpoint)
+│   │   ├── vad.go          # Silero VAD ONNX session wrapper (shared, stateful via tensors)
+│   │   ├── seam.go         # Seam-level token dedup (absolute-timestep based)
 │   │   ├── mel.go          # Mel filterbank feature extraction (FFT, windowing)
 │   │   ├── audio.go        # WAV parsing, magic-byte detection, resampling to 16kHz
 │   │   ├── ffmpeg.go       # Optional ffmpeg-backed converter for non-WAV inputs
@@ -76,7 +81,9 @@ parakeet/
 │       ├── server.go       # HTTP server, route setup, lifecycle management
 │       ├── handlers.go     # API endpoint handlers, response formatting
 │       └── types.go        # Request/response type definitions
-├── models/                 # ONNX models (downloaded separately)
+├── models/                 # ONNX models (downloaded separately, incl. silero_vad.onnx)
+├── testdata/
+│   └── reference/          # Issue #18 reproduction audio + reference transcripts
 ├── bin/                    # Build output directory
 ├── Makefile                # Build recipes
 ├── Dockerfile              # Multi-stage container build (CPU)
@@ -96,7 +103,7 @@ parakeet/
 
 ### `main.go` (Entry Point)
 
-- Parses CLI flags: `-port`, `-models`, `-log-level`, `-log-format`, `-workers`, `-ffmpeg`, `-ffmpeg-path`, `-ffmpeg-timeout`, `-gpu`, `-gpu-device`
+- Parses CLI flags: `-port`, `-models`, `-log-level`, `-log-format`, `-workers`, `-ffmpeg`, `-ffmpeg-path`, `-ffmpeg-timeout`, `-gpu`, `-gpu-device`, `-chunk-seconds`, `-chunk-overlap-seconds`, `-long-audio`, `-disable-vad-based-chunking`, `-disable-mel-based-chunking`, `-vad-model-path`
 - Configures `slog` global logger (text or JSON handler, four log levels)
 - Runs server in background goroutine, listens for SIGINT/SIGTERM
 - Graceful shutdown: waits up to 30s for in-flight requests via `http.Server.Shutdown`
@@ -107,7 +114,7 @@ parakeet/
 
 #### `server.go`
 
-- `Config` struct: Port, ModelsDir, LogLevel, LogFormat, Workers, FFmpegEnabled, FFmpegPath, FFmpegTimeout, GPUProvider, GPUDeviceID
+- `Config` struct: Port, ModelsDir, LogLevel, LogFormat, Workers, FFmpegEnabled, FFmpegPath, FFmpegTimeout, GPUProvider, GPUDeviceID, ChunkSeconds, ChunkOverlapSeconds, LongAudio, DisableVADBasedChunking, DisableMelBasedChunking, VADModelPath
 - `Server` struct: wraps config, transcriber, `http.Server`, HTTP mux, and API key
 - `New()` - Parses the GPU provider via `asr.ParseProvider` (fails fast on unknown values), initializes transcriber with worker pool, execution provider, and optional ffmpeg converter, reads `PARAKEET_API_KEY` env var, and sets up routes
 - `Run()` - Starts HTTP listener (blocks until shutdown or error)
@@ -153,6 +160,14 @@ parakeet/
 - `runInference()` - Runs the shared long-lived encoder session (variable-shape tensors supplied per `Run()`), then acquires a pool worker for decode
 - `tdtDecode()` - TDT greedy decoding loop reusing pooled session and tensors
 - `tokensToText()` - Token IDs to text with cleanup
+
+#### `chunker.go`, `boundary.go`, `vad.go`, `seam.go` (Long-Audio Chunking)
+
+- `planForAudio` / `planForAudioWithBoundaries` - Decide single-pass vs overlapping windows (long audio); the latter takes a boundary oracle.
+- `planChunks` / `planChunksWithBoundaries` - Lay out overlapping windows and split each overlap's emission ownership; the boundary is chosen by the oracle and clamped so the emit ranges always tile the timeline.
+- `boundaryOracle` interface with `vadBoundaryOracle`, `melEnergyBoundaryOracle`, `midpointBoundaryOracle`, chained by `chainBoundaryOracle` (cascade VAD -> mel energy -> midpoint). See DD-014.
+- `sileroVAD` - Shared Silero VAD ONNX session; `vadState` carries per-request recurrent state + context so the session is safe to share (runs OUTSIDE the worker pool).
+- `dedupSeam` - Drops window i+1's leading tokens that collide (in absolute encoder-frame timestep) with window i's tail; the earlier window wins. Always on, no flag.
 
 #### `ffmpeg.go`
 
@@ -229,6 +244,12 @@ parakeet/
 | `PARAKEET_API_KEY`    | API key for `/v1/*` endpoint authentication | Empty (auth disabled) |
 | `PARAKEET_GPU`        | Execution provider: `cpu` or `cuda`         | `cpu`                 |
 | `PARAKEET_GPU_DEVICE` | GPU device index for `cuda`                  | `0`                   |
+| `PARAKEET_LONG_AUDIO` | Split over-limit audio into overlapping chunks | `false`             |
+| `PARAKEET_CHUNK_SECONDS` | Sliding-window size in seconds            | `300`                 |
+| `PARAKEET_CHUNK_OVERLAP_SECONDS` | Overlap between chunks in seconds | `15`                  |
+| `PARAKEET_DISABLE_VAD_BASED_CHUNKING` | Drop the Silero VAD boundary layer | `false`          |
+| `PARAKEET_DISABLE_MEL_BASED_CHUNKING` | Drop the mel-energy boundary layer | `false`          |
+| `PARAKEET_VAD_MODEL_PATH` | Path to silero_vad.onnx                  | `<models>/silero_vad.onnx` |
 
 ## Dependencies
 
@@ -330,7 +351,14 @@ No other external Go dependencies. Standard library used for HTTP, JSON, audio p
 - `encoder-model.int8.onnx` (~652MB) or `encoder-model.onnx` (~2.5GB)
 - `decoder_joint-model.int8.onnx` (~18MB) or `decoder_joint-model.onnx` (~72MB)
 - `config.json`, `vocab.txt`, `nemo128.onnx`
-- Download via `make models` or manually from HuggingFace
+- `silero_vad.onnx` (~2.3MB, snakers4/silero-vad v6.2.1, MIT) - used only for VAD-aware chunk boundaries in long-audio mode. Missing file is a graceful degrade (warns once, falls back to mel energy), not a fatal error.
+- Download via `make models` or manually from HuggingFace (Silero from its GitHub release)
+
+### Chunk Boundary Selection (long-audio mode)
+
+- With `-long-audio`, audio over the model's frame limit is split into overlapping windows. Each overlap's emission boundary is placed on silence by a cascade: Silero VAD, then smoothed mel energy, then the arithmetic midpoint (see DD-014).
+- A second always-on safety net (`dedupSeam`) removes duplicate/colliding tokens right at each seam, using absolute encoder-frame timesteps; the earlier (warmed-up) window wins collisions.
+- Tuning constants (VAD threshold, tolerances, smoothing) are named constants in `boundary.go`/`seam.go`, deliberately NOT flags. Flags only toggle whole layers (`-disable-vad-based-chunking`, `-disable-mel-based-chunking`) and the VAD model path (`-vad-model-path`).
 
 ### Tensor Memory Management
 

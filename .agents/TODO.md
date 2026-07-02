@@ -14,6 +14,7 @@ Pending tasks and improvements for the project.
 
 ## Performance
 
+- [x] **VAD-aware chunk boundaries + seam dedup**: Fixes chunk-seam hallucinations (issue #18) in long-audio mode. Overlap ownership is split on silence via a VAD -> mel-energy -> midpoint cascade, and a seam-level token dedup removes duplicated/colliding tokens. Toggle layers with `-disable-vad-based-chunking` / `-disable-mel-based-chunking`; VAD model path via `-vad-model-path`. See DD-014.
 - [x] **GPU inference** — Implemented via ONNX Runtime execution providers. Opt in with `-gpu cuda` / `-gpu-device N`; a dedicated `*-cuda` Docker image ships the GPU build. CPU remains the default. See DD-013. TensorRT and other accelerators remain out of scope (extend `buildSessionOptions`).
 - [ ] **Batch inference support** — Current implementation processes one audio file at a time. Batching multiple requests could improve throughput under load.
 - [ ] **Higher quality resampling** — `audio.go:resample()` uses linear interpolation. Sinc-based or polyphase resampling would improve audio quality.

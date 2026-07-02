@@ -35,6 +35,9 @@ func main() {
 	flag.IntVar(&cfg.ChunkSeconds, "chunk-seconds", 300, "Sliding-window size in seconds for long audio (must stay under the model limit)")
 	flag.IntVar(&cfg.ChunkOverlapSeconds, "chunk-overlap-seconds", 15, "Overlap in seconds between consecutive chunks")
 	flag.BoolVar(&cfg.LongAudio, "long-audio", false, "Split audio longer than the model limit into overlapping chunks instead of rejecting it")
+	flag.BoolVar(&cfg.DisableVADBasedChunking, "disable-vad-based-chunking", false, "Disable the Silero VAD layer of the chunk-boundary cascade (falls back to mel energy)")
+	flag.BoolVar(&cfg.DisableMelBasedChunking, "disable-mel-based-chunking", false, "Disable the mel-energy layer of the chunk-boundary cascade (falls back to the midpoint)")
+	flag.StringVar(&cfg.VADModelPath, "vad-model-path", "", "Path to the Silero VAD ONNX model (default: silero_vad.onnx inside the models dir)")
 	flag.Parse()
 
 	// Any flag not set on the command line falls back to its matching env var,
