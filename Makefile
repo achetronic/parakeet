@@ -25,7 +25,7 @@ MODELS_DIR := ./models
 
 .PHONY: all build clean test fmt vet lint run help
 .PHONY: docker-build-int8 docker-build-fp32 docker-build-cuda docker-run-int8 docker-run-fp32 docker-run-cuda docker-push
-.PHONY: models models-int8 models-fp32
+.PHONY: models models-int8 models-fp32 models-silero-vad
 .PHONY: release release-linux release-darwin release-windows
 .PHONY: deps-onnxruntime
 
@@ -116,9 +116,25 @@ deps-onnxruntime: ## Install ONNX Runtime library
 # Models are downloaded from HuggingFace: https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx
 # ONNX conversion by Ivan Googol Stupakov (https://github.com/istupakov)
 
+# Silero VAD model for chunk-boundary selection (long-audio mode). Pinned to a
+# specific release tag and sha256 so the download is reproducible and verified.
+# snakers4/silero-vad is MIT licensed. NOTE: at v6.2.1 the ONNX file lives at
+# src/silero_vad/data/silero_vad.onnx (the older files/silero_vad.onnx path is
+# gone), so the URL points there.
+SILERO_VAD_VERSION ?= v6.2.1
+SILERO_VAD_SHA256 ?= 1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3
+SILERO_VAD_URL := https://github.com/snakers4/silero-vad/raw/$(SILERO_VAD_VERSION)/src/silero_vad/data/silero_vad.onnx
+
 models: models-int8 ## Download models (default: int8)
 
-models-int8: ## Download int8 quantized models (~670MB)
+models-silero-vad: ## Download and verify the Silero VAD model (MIT)
+	@mkdir -p $(MODELS_DIR)
+	@echo "Downloading Silero VAD $(SILERO_VAD_VERSION) (MIT) ..."
+	@curl -L -o $(MODELS_DIR)/silero_vad.onnx "$(SILERO_VAD_URL)"
+	@echo "$(SILERO_VAD_SHA256)  $(MODELS_DIR)/silero_vad.onnx" | sha256sum -c -
+	@echo "Silero VAD model verified"
+
+models-int8: models-silero-vad ## Download int8 quantized models (~670MB)
 	@mkdir -p $(MODELS_DIR)
 	@echo "Downloading Parakeet TDT int8 models from https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx ..."
 	@curl -L -o $(MODELS_DIR)/config.json "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/config.json"
@@ -128,7 +144,7 @@ models-int8: ## Download int8 quantized models (~670MB)
 	@curl -L -o $(MODELS_DIR)/decoder_joint-model.int8.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/decoder_joint-model.int8.onnx"
 	@echo "Models downloaded to $(MODELS_DIR)"
 
-models-fp32: ## Download fp32 full precision models (~2.5GB)
+models-fp32: models-silero-vad ## Download fp32 full precision models (~2.5GB)
 	@mkdir -p $(MODELS_DIR)
 	@echo "Downloading Parakeet TDT fp32 models from https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx ..."
 	@curl -L -o $(MODELS_DIR)/config.json "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/config.json"
@@ -215,6 +231,7 @@ help: ## Show this help message
 	@echo "  \033[36mmodels\033[0m              Download models (default: int8)"
 	@echo "  \033[36mmodels-int8\033[0m         Download int8 quantized models (~670MB)"
 	@echo "  \033[36mmodels-fp32\033[0m         Download fp32 full precision models (~2.5GB)"
+	@echo "  \033[36mmodels-silero-vad\033[0m   Download and verify the Silero VAD model (MIT)"
 	@echo ""
 	@echo "\033[1mDocker:\033[0m"
 	@echo "  \033[36mdocker-build-int8\033[0m   Build Docker image with int8 models"

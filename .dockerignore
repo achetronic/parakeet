@@ -8,6 +8,7 @@ models/
 
 # Test files
 test/
+testdata/
 *.wav
 
 # Git
