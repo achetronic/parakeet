@@ -1,0 +1,542 @@
+1
+00:00:01,000 --> 00:00:32,000
+In this video, I'm going to teach you fundamental strategies and frameworks for tackling case interviews in roughly 30 minutes.
+We'll cover each step of the case interview from beginning to end, and go through a full case interview together.
+By the end of this video, you will not only fully understand what case interviews are,
+but you will learn effective strategies to use on interview day to make you feel more confident in yourself.
+We have a lot of material to cover, so please give this video a quick like to support the channel and we'll get started
+
+2
+00:00:33,000 --> 00:01:03,000
+right away.
+So, what is a case interview?
+As you may already know, case interviews are a special type of interview question that is commonly used by management consulting companies such as McKinsey,
+BCG, and Bain.
+
+A case interview or case is a 30 to 45 minute exercise in which you and the interviewer will work together to develop a recommendation
+to answer or solve a business problem.
+These business problems can be anything that real companies face.
+
+3
+00:01:04,000 --> 00:01:35,000
+A few examples are, how can Coca-Cola increase its profitability?
+What should Netflix do to increase customer retention?
+How should Apple price its new iPhone?
+And where should Disney open its next Disneyland theme park?
+
+At the beginning of the interview, the interviewer will give you background information and the business problem.
+And in the end, you'll present a recommendation and provide two to three reasons that support your recommendation.
+These two to three reasons will likely be both quantitative and qualitative.
+
+4
+00:01:36,000 --> 00:02:06,000
+You may need to make estimations or assumptions, perform calculations, interpret charts and graphs, brainstorm ideas, and have qualitative discussions.
+There is usually no single right answer for a case.
+As long as you have logical reasons and evidence that support your recommendation, you will do well.
+Although there are many business problems you could be asked to solve, almost all case interviews follow the same format or structure.
+So, the good news is that you can use the same strategies for every single case interview.
+
+5
+00:02:07,000 --> 00:02:38,000
+There are seven main parts of a case interview.
+Understanding the case background information, asking clarifying questions, structuring a framework, starting the case, solving quantitative problems, answering qualitative questions, and delivering a recommendation.
+To best illustrate exactly how a case interview looks like, we'll go through each of these parts step by step.
+Let's start with the first part, understanding the case background.
+The case interview will begin with the interviewer giving you the case background information.
+
+6
+00:02:39,000 --> 00:03:13,000
+Let's say that the interviewer reads you the following.
+Our client is a large manufacturer and retailer of non-alcoholic beverages such as sodas, juices, sports drinks, and teas.
+They have annual revenues of roughly$30 billion and an operating margin of roughly 30%.
+Our client is looking to grow and is considering entering the beer market in the United States.
+
+Should they enter?
+As the interviewer reads this, take notes.
+It is important to understand what the objective of the case is and keep track of information.
+
+7
+00:03:14,000 --> 00:03:48,000
+One strategy for taking notes effectively is to turn your paper landscape and draw a vertical line to divide your paper into two sections.
+The first section should be roughly two thirds of the page, while the second section will be roughly one third of the page.
+Take notes in the second section of your page.
+
+After the interviewer finishes giving the case background information, confirm that you understand the situation and objective.
+Provide a concise synthesis like the following.
+To make sure I understand correctly, our client is a large manufacturer and retailer of non-alcoholic beverages.
+
+8
+00:03:49,000 --> 00:04:20,000
+They are looking to grow, and our objective is to determine whether or not they should enter the U.S.
+Beer market.
+Make sure your synthesis is concise.
+You do not want to regurgitate verbatim everything that the interviewer has said.
+Only mention the most important pieces of information.
+
+You should also make sure that you verify the objective of the case.
+Answering or solving the wrong case objective is the quickest way to fail a case interview.
+Next, we'll move on to the next step, asking clarifying questions.
+
+9
+00:04:21,000 --> 00:04:55,000
+Now you'll have the opportunity to ask questions before you begin thinking about how to solve the case.
+At this point, only ask questions that are absolutely critical for you to fully understand the case background and objective.
+You'll be able to ask more questions later.
+There are four types of questions you could ask.
+
+One, asking for a definition of a term you're unfamiliar with.
+Two, asking for information that strengthens your understanding of the company or situation.
+Three, asking questions that clarify the objective of the case.
+
+10
+00:04:55,000 --> 00:05:28,000
+Four, asking to repeat information you may have missed.
+So for this case, you might ask the following questions.
+Is our client looking to specifically grow revenues or profits?
+Answer, our client wants to grow profits.
+
+Is there a particular financial goal or metric our client is trying to reach within a certain timeframe?
+Answer, they're looking to grow annual profits by$5 billion within five years.
+Now we'll move on to the third step of the case interview, structuring a framework.
+
+11
+00:05:29,000 --> 00:06:01,000
+After you understand the case background and objective, lay out a framework of what areas you would want to look into to answer or solve
+the case.
+A framework is simply a tool that helps you structure and break down complex problems into simpler, smaller components.
+
+Think of a framework as brainstorming different ideas and organizing them into different categories.
+When creating a framework, it is completely acceptable to ask the interviewer for a few minutes of silence to write it out.
+You might say something like this.
+
+12
+00:06:02,000 --> 00:06:34,000
+Would you mind if I take a few minutes to structure my thoughts and develop a framework to tackle this case?
+Most of the time, the interviewer will gladly give you a couple of minutes to gather your thoughts.
+For this case example, what do you need to know in order to help the client decide whether or not they should enter the beer
+market?
+You might brainstorm the following questions.
+
+Does our client know how to produce beer?
+Would people buy beer made by our client?
+Where would our client sell its beer?
+How much would it cost to enter the beer market?
+
+13
+00:06:34,000 --> 00:07:08,000
+Will our client be profitable from doing this?
+How can our client out-compete competitors?
+And what is the size of the beer market?
+This is not a very structured way of tackling the case.
+Instead, you should organize your ideas into a framework that has three to four broad areas, also known as buckets,
+
+that you want to investigate.
+An easy way to develop these buckets is to ask yourself,
+what are the three to four things that absolutely must be true for you to 100% recommend that the client should enter the beer
+
+14
+00:07:08,000 --> 00:07:19,000
+market?
+In an ideal world, these four things would need to be true.
+1. The beer market is an attractive market with high profit margins.
+
+15
+00:07:19,000 --> 00:07:19,000
+2.
+
+16
+00:07:19,000 --> 00:07:25,000
+Competitors are weak and our client will be able to capture significant market share.
+
+17
+00:07:25,000 --> 00:07:25,000
+3.
+
+18
+00:07:25,000 --> 00:07:29,000
+Our client has the capabilities to produce an outstanding beer product.
+
+19
+00:07:31,000 --> 00:07:31,000
+4.
+
+20
+00:07:31,000 --> 00:08:03,000
+Our client will be extremely profitable.
+You can rephrase these points to be the broad categories in your framework.
+You can write your framework in the first section of your paper.
+
+Notice that the four buckets in the framework correspond to the four things that we believe need to be true to be confident in recommending
+that our client should enter the beer market.
+Next, let's add a few bullet points under each category to give more details on exactly what information we need to know to decide
+
+21
+00:08:03,000 --> 00:08:34,000
+whether our client should enter the beer market.
+Notice that each bullet in a bucket is a question that helps answer the overall question of the bucket.
+For example, in the first bucket, knowing the market size, the market growth rate,
+
+and average profit margins helps us determine whether the beer market is an attractive market.
+This entire process of brainstorming ideas and developing a structured framework should only take a few minutes.
+So how do you come up with a framework so quickly?
+
+22
+00:08:34,000 --> 00:09:12,000
+Most candidates make the mistake of either using a single memorized framework for every case,
+or memorizing a different framework for every type of case.
+The issue with memorized frameworks is that they aren't tailored to the specific case you are solving for.
+
+When given an atypical business problem, your framework elements will not be entirely relevant.
+Interviewers can easily tell that you are regurgitating memorized information and not thinking critically.
+So instead of memorizing frameworks, I recommend memorizing a list of eight to 10 broad business elements, such as the following.
+
+23
+00:09:13,000 --> 00:09:48,000
+Market attractiveness, competitive landscape, company capabilities or attractiveness, customer segments or needs, profitability or financials, strategic alternatives, risks and mitigations,
+and creating your own bucket.
+When given a case, mentally run through this list and pick the three to four elements that are most relevant to the case.
+
+This will be your framework.
+If the list does not give you enough elements, brainstorm and add your own unique elements to your framework.
+This strategy guarantees that your framework elements are relevant to the case.
+
+24
+00:09:49,000 --> 00:10:21,000
+It also demonstrates that you can create unique tailored frameworks for every business problem or situation.
+Using this strategy for this case, you would run through your list of memorized business elements and select the following.
+Market attractiveness, competitive landscape, company capabilities, and profitability.
+As you can see, this strategy is a shortcut for creating unique tailored frameworks for every business problem.
+You do not need to develop a framework entirely from scratch each time.
+
+25
+00:10:22,000 --> 00:10:56,000
+Now that you have your framework, turn your paper to face the interviewer and walk them through it.
+It might sound something like this.
+To decide whether or not our client should enter the market, I want to look into four main areas.
+One, I want to look into the beer market attractiveness.
+Is this an attractive market to enter?
+
+I'd want to look into areas such as the market size, growth rate, and profit margins.
+Two, I want to look into the beer competitive landscape.
+Is this market competitive, and will our client be able to capture meaningful market share?
+
+26
+00:10:57,000 --> 00:11:27,000
+To do this, I want to look into questions such as the number of competitors, how much market share each competitor has,
+and whether competitors have any competitive advantages.
+Three, I want to look into our clients'capabilities.
+Do they have the capabilities to succeed in the beer market?
+
+I want to look into things such as whether they have the expertise to produce beer,
+whether they have the distribution channels to sell that beer, and whether there's any existing synergies they can leverage.
+4. I want to look into expected profitability.
+
+27
+00:11:27,000 --> 00:11:58,000
+Will our client be profitable from entering the beer market?
+I'd like to look into areas such as expected revenues, expected costs, and how long it would take to break even.
+At this point, the interviewer might ask a few questions on your framework,
+
+but will otherwise indicate whether they agree or disagree with your approach.
+Moving on to the next step of the case interview, starting the case.
+There are two different styles of case interviews, interviewer-led cases and candidate-led cases.
+
+28
+00:11:59,000 --> 00:12:32,000
+If this is an interviewer-led case, the interviewer will propose which area of your framework they would like to dive deeper into.
+They might say something like the following.
+Your framework makes sense to me.
+Why don't we start by estimating the size of the US beer market?
+
+If this is a candidate-led case, you will be expected to propose an area to look into.
+There is no right or wrong answer as to which area to start first.
+So, feel free to propose any area of your framework as long as you have a reason for it.
+
+29
+00:12:32,000 --> 00:13:05,000
+You could say something like the following.
+To start, I'd like to look into the beer market attractiveness.
+I'd like to first understand the market size to determine if the beer market is an attractive market.
+If you end up picking an area that the interviewer does not want you to explore,
+
+they will redirect you to an area that they do want you to explore.
+So, these two styles of case interviews are nearly identical.
+The only difference is whether or not you have to proactively propose what area to explore first and what area you want to explore
+
+30
+00:13:05,000 --> 00:13:42,000
+next.
+So, once the case has been kicked off by either you or the interviewer, you'll have to solve quantitative problems and answer qualitative questions,
+and in this section, we'll focus on solving quantitative problems first.
+There are three different types of quantitative problems you may get asked to solve.
+
+Market sizing or estimation questions, profit or profitability questions, and charts and graphs questions.
+Let's start with the first type, market sizing or estimation questions.
+These types of questions ask you to estimate the size of a particular market or calculate a particular figure.
+
+31
+00:13:42,000 --> 00:14:16,000
+Let's say that the interviewer asks you the following, what is the market size of beer in the US?
+Most candidates jump right into the math, stating the US population and then performing various calculations.
+Doing math without laying out a structure often leads to making unnecessary calculations or reaching a dead end.
+Instead, lay out an upfront approach to help avoid these mistakes and demonstrate that you are a logical, structured thinker.
+For this market sizing problem, you could structure your approach in the following way.
+
+32
+00:14:16,000 --> 00:14:46,000
+Start with the US population, estimate the percentage that are legally allowed to drink alcohol, then estimate the percentage that drink beer,
+then estimate the frequency in which people drink beer, and then finally estimate the average price per can or bottle of beer.
+Multiplying all of these steps together will give you the answer.
+By laying out an approach upfront, the interviewer can easily understand how you are thinking about the problem.
+With the right structure, the rest of the problem is just simple arithmetic.
+
+33
+00:14:47,000 --> 00:15:25,000
+Sometimes the interviewer will give you numbers to use for these calculations, but other times you'll be expected to make assumptions or estimates.
+When performing your calculations, make sure to do them on a separate sheet of paper.
+Calculations often get messy, and you want to keep your original paper clean and organized.
+
+A sample answer to this question could sound like the following.
+Following my approach, I'll assume the US population is 320 million people.
+Assuming the average life expectancy is 80 years old and an even distribution of ages, roughly 75% of the population can legally drink alcohol.
+
+34
+00:15:26,000 --> 00:16:03,000
+This gives us 240 million people.
+Of these, let's assume 75% of people drink beer.
+That gives us 180 million beer drinkers.
+
+On average, a person drinks perhaps 5 beers a week, or roughly 250 beers per year, if we're assuming roughly 50 weeks per year.
+So, that gives us 180 million people times 250 beers per year, or 45 billion cans or bottles of beer.
+Assuming the average can or bottle costs$2, this gives us a market size of$90 billion.
+
+35
+00:16:04,000 --> 00:16:41,000
+Now that you have your answer, you should not only just answer the question, but tie your answer back to the case objective.
+In other words, how does knowing the US market size of beer help you decide whether or not our client should enter the beer
+market?
+You could say something like the following.
+
+Given that our client has annual revenues of$30 billion, a$90 billion beer market represents a massive opportunity.
+The market size makes the beer market look attractive,
+but I'd like to understand if beer margins are typically high and determine how much market share our client could realistically capture.
+
+36
+00:16:42,000 --> 00:17:15,000
+The second type of quantitative question you could be asked is to calculate profit or profitability.
+To answer profit or profitability questions, you only really need to know the basic formulas for profit.
+These are that profit equals revenue minus costs.
+Revenue equals quantity times price.
+
+Costs equal total variable costs plus total fixed costs.
+And finally, total variable costs equal quantity times variable cost per unit.
+Putting these equations together, we can rewrite them in the following simplified way.
+
+37
+00:17:16,000 --> 00:17:50,000
+Profit equals price minus variable costs times quantity minus total fixed costs.
+You should also know that profit margin equals revenue minus costs, all divided by revenue.
+And you should also know what a break-even point is.
+
+A break-even point occurs when a company sells enough product such that it has exactly recouped all of its costs.
+In other words, break-even occurs when profit equals zero.
+To solve for the break-even point, you would simply set profit equal to zero and solve for the unknown variable in the equation.
+
+38
+00:17:51,000 --> 00:18:24,000
+As an example of a profit or profitability problem, let's say that the interviewer asks you the following.
+Assume that a 12-ounce can of beer sells for$2 on average.
+To produce a keg of beer, it costs$100 for raw materials,$95 for labor, and$75 for storage.
+If a keg of beer holds 1,800 ounces of beer, what is the profit margin for beer?
+As with any other type of quantitative problem, make sure to structure your approach before you begin doing any calculations.
+
+39
+00:18:25,000 --> 00:18:59,000
+A sample answer could look like the following.
+To calculate the average margin for beer, I will first calculate the total costs to produce a keg of beer.
+Next, I will divide the total volume of a keg by the total volume of a can to determine how many cans a keg
+of beer produces.
+
+Afterwards, I will divide the total cost of producing a keg of beer by the number of cans to determine cost per can.
+Finally, I can use the price and cost per can of beer to calculate the average margin of beer.
+Following this approach, the total cost of a keg of beer is$100 plus$95 plus$75, or$270.
+
+40
+00:19:05,000 --> 00:19:38,000
+The number of cans of beer in a keg is 1,800 ounces divided by 12 ounces, or 150 cans.
+Therefore, the cost per can of beer is$270 divided by 150 cans, or$1.80.
+Since the average price of beer is$2 per can, the profit is$0.20 per can.
+This makes the margin$0.20 divided by$2, or a 10% profit margin.
+Now that you have your answer, remember to tie your answer back to the overall case objective.
+
+41
+00:19:39,000 --> 00:20:12,000
+Compared to our client's overall operating margin of 30%, the beer market profit margin of 10% is significantly lower.
+Although the market size for beer is large, the low margin makes the beer market less attractive.
+The third type of quantitative question you could get asked is interpreting charts and graphs.
+The types of charts and graphs you should be familiar with include bar charts, pie charts, line graphs, bubble charts, and waterfall charts.
+Returning to our case example, the interviewer may show you the following.
+
+42
+00:20:13,000 --> 00:20:44,000
+A helpful strategy is to start your analysis by explaining what the axes of the chart show.
+This will help you understand the chart better.
+Don't just read what numbers the chart shows, but instead interpret what those numbers mean for the case objective.
+
+A sample answer might sound like the following.
+For this chart, we have market share on the y-axis and different categories of beer on the x-axis.
+For each category, we see that market share is concentrated among a few large players.
+
+43
+00:20:45,000 --> 00:21:17,000
+This implies a highly competitive market with high barriers to entry.
+Because of this, the beer market does not look attractive because it is so competitive.
+In addition to asking quantitative questions, the interviewer will also ask qualitative questions.
+There are two types of qualitative questions, brainstorming questions and business opinion questions.
+Looking at brainstorming questions first, the interviewer might ask, what are the barriers to entry in the beer market?
+
+44
+00:21:18,000 --> 00:21:52,000
+Most candidates answer by listing ideas that immediately come to mind, such as brewing equipment, beer production expertise, distribution channels, or brand name.
+This is a highly unstructured way of answering the question.
+Make sure to use a simple structure to organize your thoughts.
+
+A simple structure, such as thinking about barriers to entry as either economic barriers or non-economic barriers,
+helps facilitate brainstorming and demonstrates logic and structure.
+With this structure, you might come up with the following answer.
+
+45
+00:21:52,000 --> 00:22:27,000
+For economic barriers, you have equipment, raw materials, and other capital.
+For non-economic barriers, you have beer brewing expertise, brand name, and distribution channels.
+Examples of other simple structures that you can use include the following.
+
+We have internal, external, short-term, long-term, economic, non-economic, quantitative and qualitative, direct and indirect, supply side and demand side, upside and downside,
+and benefits and costs.
+Additionally, take your answer and connect it back to the case objective.
+
+46
+00:22:28,000 --> 00:23:00,000
+In this example, are these barriers to entry high or low in your opinion?
+Do you think our client can overcome these obstacles to enter the beer market?
+You might answer this question in the following way.
+I'm thinking of barriers to entry as economic barriers and non-economic barriers.
+
+Economic barriers include things such as equipment, raw material, and other capital.
+Non-economic barriers include beer brewing expertise, brand name, and distribution channels.
+Looking at these barriers, I think it will take our client a lot of work to overcome these barriers.
+
+47
+00:23:01,000 --> 00:23:34,000
+While our client does have a brand name and distribution channels,
+they lack beer brewing expertise and would have to buy a lot of expensive equipment and machinery.
+These barriers make entering the beer market difficult.
+The second type of qualitative question are business opinion questions.
+
+The interviewer may ask you something like the following.
+Do you think there are significant production synergies in producing non-alcoholic beverages and producing beer?
+As always, structure your answer and connect your answer to the case objective.
+
+48
+00:23:35,000 --> 00:24:08,000
+Here is a sample answer.
+Production involves equipment, raw materials, and labor.
+There is likely some overlap in equipment, such as using the same bottling machines,
+but our client will likely need new equipment for brewing beer.
+
+Raw materials on the other hand are completely different.
+Our client will need to source barley, hops, and yeast, which it currently does not use in its existing beverages.
+Finally, the same labor can be used, but employees will need new training since producing beer is fairly different from producing a non-alcoholic drink.
+
+49
+00:24:09,000 --> 00:24:42,000
+Overall, I think there are only a few production synergies that our client can leverage, which makes entering the market a bit more difficult.
+You've done a ton of work, and now it is time to put everything you've done together into a recommendation.
+Throughout the interview, you should have been making notes of key takeaways after each question that you answer.
+
+Take a look at the key takeaways you've accumulated so far and decide whether you want to recommend entering the beer market or not
+entering the beer market.
+Throughout the case, you may have identified the following key takeaways.
+
+50
+00:24:43,000 --> 00:25:19,000
+The US beer market size is$90 billion compared to our client's annual revenue of$30 billion.
+The beer market profit margins are 10%, compared to our client's average margin of 30%.
+The beer market is highly concentrated across all categories.
+
+Barriers to entry are moderate, and there are some synergies with existing production.
+Remember, there is no right or wrong recommendation, as long as you support your recommendation with reasons and evidence.
+Secondly, regardless of what stance you take, make sure you have a firm recommendation.
+
+51
+00:25:19,000 --> 00:25:52,000
+You do not want to be flimsy and switch back and forth between recommending entering the market and not entering the market.
+Third, make sure your recommendation is clear and concise.
+And finally, include next steps in your recommendation.
+You can use the following structure when delivering your recommendation.
+
+First, clearly state what your recommendation is.
+Then, follow that with two to three reasons that support your recommendation.
+And finally, state what potential next steps would be to further validate your recommendation.
+
+52
+00:25:53,000 --> 00:26:27,000
+Next steps can include a number of different things.
+You could include buckets in your framework that you were not able to cover.
+You could also include open questions that you still have regarding the case.
+Finally, you could name potential risks relating to your recommendation that you would like to explore.
+Typically, the interviewer will prompt you for a final recommendation.
+
+They might say something like, let's say that you bump into the CEO in the elevator.
+He asks what your preliminary recommendation is.
+What would you say?
+The conclusion of this case might sound like the following.
+
+53
+00:26:28,000 --> 00:27:00,000
+I recommend that our client should not enter the beer market for the following three reasons.
+One, although the market size is fairly large at$90 billion, the margins for beer are just 10%,
+significantly less than our client's overall operating margin of 30%.
+
+Two, the beer market is very competitive.
+In all beer segments, market share is concentrated among a few players, which implies high barriers to entry.
+Our client lacks beer brewing expertise to produce a great product to compete with incumbents.
+
+54
+00:27:01,000 --> 00:27:34,000
+Three, there are not that many production synergies that a client can leverage with its existing products.
+Our client would need to buy new equipment, source new raw materials, and provide new training to employees, which would be time-consuming and costly.
+For next steps, I want to look into our client's annual expected profits if they were to enter the U.S.
+
+Beer market.
+I hypothesize they will be unable to achieve an increase in annual profits of$2 billion within five years,
+but I'd like to confirm this through further analysis.
+
+55
+00:27:36,000 --> 00:28:09,000
+And with that, we have made our way through an entire case interview.
+That's all there is to it.
+To recap, all case interviews roughly follow the same format or structure.
+The industry you are working with may be different, the quantitative problems may be different, and the qualitative questions may be different,
+
+but the overall strategy and approach remain the same.
+If you follow the fundamental strategies covered in this video and continue practicing case interviews, you should be in great shape for your interview.
+We've covered a lot of material in this video, but of course,
+
+56
+00:28:10,000 --> 00:28:43,000
+there is many more case interview strategies to learn and cases to be practiced.
+This video is a short preview of the full Hacking the Case Interview online course,
+which covers each step of the case interview in even more detail.
+
+Through over 50 video lessons and 20 full-length practice cases,
+this 15-25 hour online course is designed to get you a prestigious and lucrative job offer at a top-tier consulting firm.
+Second, if you found this video helpful, please take a second to give this video a like to help support the channel and encourage
+
+57
+00:28:43,000 --> 00:28:59,000
+more content.
+Finally, the only way to get better at case interviews is to practice,
+so make sure to do as many mock case interviews as you can.
+Check out some of the other videos on my channel where I walk through many full-length mock case interviews.
+
