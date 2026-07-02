@@ -51,6 +51,15 @@ type Config struct {
 	ChunkSeconds        int
 	ChunkOverlapSeconds int
 	LongAudio           bool
+
+	// DisableVADBasedChunking and DisableMelBasedChunking turn off the first two
+	// layers of the chunk-boundary cascade (Silero VAD, then mel energy). The
+	// arithmetic midpoint is always the final fallback. VADModelPath overrides
+	// where the Silero VAD model is loaded from; empty means silero_vad.onnx
+	// inside the models directory.
+	DisableVADBasedChunking bool
+	DisableMelBasedChunking bool
+	VADModelPath            string
 }
 
 // Server represents the HTTP server for the ASR service
@@ -87,6 +96,11 @@ func New(cfg Config) (*Server, error) {
 			Enabled:        cfg.LongAudio,
 			Seconds:        cfg.ChunkSeconds,
 			OverlapSeconds: cfg.ChunkOverlapSeconds,
+		},
+		Boundary: asr.BoundaryConfig{
+			DisableVAD:   cfg.DisableVADBasedChunking,
+			DisableMel:   cfg.DisableMelBasedChunking,
+			VADModelPath: cfg.VADModelPath,
 		},
 	})
 	if err != nil {
