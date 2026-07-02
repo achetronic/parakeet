@@ -305,6 +305,9 @@ chunk_%03d.wav`) or use a CPU image, which is bounded by system RAM instead.
 | `-long-audio`            | Split audio over the model limit into chunks instead of rejecting it | `false` | `-long-audio`         |
 | `-chunk-seconds`         | Sliding-window size for long audio, in seconds    | `300`      | `-chunk-seconds 240`           |
 | `-chunk-overlap-seconds` | Overlap between consecutive chunks, in seconds    | `15`       | `-chunk-overlap-seconds 10`    |
+| `-disable-vad-based-chunking` | Disable the Silero VAD chunk-boundary layer (falls back to mel energy) | `false` | `-disable-vad-based-chunking` |
+| `-disable-mel-based-chunking` | Disable the mel-energy chunk-boundary layer (falls back to the midpoint) | `false` | `-disable-mel-based-chunking` |
+| `-vad-model-path`        | Path to the Silero VAD ONNX model                 | `<models>/silero_vad.onnx` | `-vad-model-path /opt/silero_vad.onnx` |
 
 **Examples:**
 
@@ -337,6 +340,23 @@ here). Pass `-long-audio` to split it into overlapping windows
 results, dropping the overlap so words at the seams are not duplicated. Files
 under the chunk size are transcribed in one pass either way.
 
+**How chunk boundaries are chosen.** A blind split in the middle of an overlap
+can fall mid-word and make that word show up twice or vanish at the seam. To
+avoid this, the overlap is split on silence using a cascade (each layer falls
+through to the next when it cannot decide):
+
+1. **Silero VAD** picks the centre of the longest silence in the overlap. This
+   needs `silero_vad.onnx` in the models directory (downloaded by `make models`;
+   see below). A missing model is not fatal: it warns once and falls back to the
+   next layer.
+2. **Mel energy** picks the quietest point of the already-extracted features.
+3. **Midpoint** is the final fallback (the original behaviour).
+
+A second, always-on safety net removes any duplicate or colliding tokens right
+at each seam. You can turn off individual layers with
+`-disable-vad-based-chunking` / `-disable-mel-based-chunking`. See DD-014 in
+`.agents/DESIGN_DECISIONS.md` for the full rationale.
+
 ### Environment Variables
 
 Every command-line flag also reads from an environment variable: take the flag
@@ -364,10 +384,14 @@ The following files are required in the models directory:
 | ------------------------------- | ------ | ------------------------ |
 | `config.json`                   | 97 B   | Model configuration      |
 | `vocab.txt`                     | 94 KB  | SentencePiece vocabulary |
+| `nemo128.onnx`                  | 140 KB | Preprocessor graph       |
 | `encoder-model.int8.onnx`       | 652 MB | Quantized encoder        |
 | `decoder_joint-model.int8.onnx` | 18 MB  | Quantized TDT decoder    |
+| `silero_vad.onnx`               | 2.3 MB | Silero VAD (chunk boundaries, long-audio only; optional) |
 
 For full precision models, use `encoder-model.onnx` (requires `encoder-model.onnx.data`, 2.5GB total) and `decoder_joint-model.onnx` (72MB).
+
+`silero_vad.onnx` ([snakers4/silero-vad](https://github.com/snakers4/silero-vad), MIT, pinned to release v6.2.1) is downloaded and checksum-verified by `make models`. It is only used to place chunk boundaries on silence in long-audio mode; if it is missing the server logs a warning once and falls back to mel-energy boundaries.
 
 ## API Reference
 
