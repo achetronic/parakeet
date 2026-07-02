@@ -15,7 +15,7 @@ import (
 // (snakers4/silero-vad, MIT). The model is stateful: its recurrent state travels
 // through the "state"/"stateN" tensors per call rather than living inside the
 // session, so a single session can be shared across concurrent requests as long
-// as every caller keeps its own vadState (see DD-014).
+// as every caller keeps its own vadState.
 const (
 	// vadWindowSamples is the fixed analysis window Silero v5+ expects at 16 kHz:
 	// 512 samples, i.e. 32 ms per inference.
@@ -56,7 +56,7 @@ func (s *vadState) reset() {
 	}
 }
 
-// sileroVAD wraps the shared Silero VAD ONNX session. Like the encoder (DD-011),
+// sileroVAD wraps the shared Silero VAD ONNX session. Like the encoder,
 // it is a single long-lived DynamicAdvancedSession reused across requests and
 // runs OUTSIDE the decoder worker pool, so its concurrency is bounded by the
 // number of in-flight HTTP requests rather than by -workers.

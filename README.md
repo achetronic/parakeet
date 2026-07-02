@@ -354,8 +354,7 @@ through to the next when it cannot decide):
 
 A second, always-on safety net removes any duplicate or colliding tokens right
 at each seam. You can turn off individual layers with
-`-disable-vad-based-chunking` / `-disable-mel-based-chunking`. See DD-014 in
-`.agents/DESIGN_DECISIONS.md` for the full rationale.
+`-disable-vad-based-chunking` / `-disable-mel-based-chunking`.
 
 ### Environment Variables
 

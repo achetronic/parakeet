@@ -3,7 +3,7 @@
 
 package asr
 
-// This file implements the seam-level token deduplication described in DD-014.
+// This file implements seam-level token deduplication for long-audio chunking.
 // Even with the boundary placed on silence, the two windows straddling a seam
 // timestamp a word landing near the boundary slightly differently, so a token
 // can still be emitted twice (duplicate) or, less often, as two different

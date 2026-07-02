@@ -218,7 +218,7 @@ type ChunkConfig struct {
 }
 
 // BoundaryConfig tunes how the emission boundary inside each chunk overlap is
-// chosen (see DD-014). By default the cascade is VAD -> mel energy -> midpoint;
+// chosen. By default the cascade is VAD -> mel energy -> midpoint;
 // the disable flags drop the earlier layers so the cascade falls through to the
 // next one. VADModelPath points at the Silero VAD ONNX file; when empty the
 // caller resolves it to silero_vad.onnx inside the models directory.
@@ -427,7 +427,7 @@ func NewTranscriber(modelsDir string, workers int, opts Options) (*Transcriber, 
 	// Load the Silero VAD model for chunk-boundary selection. It is only useful
 	// when long-audio windowing is on, and only when the VAD layer is enabled.
 	// A missing model file is not fatal: warn once and let the boundary stack
-	// fall back to mel energy (see DD-014). Any other load error is fatal so a
+	// fall back to mel energy. Any other load error is fatal so a
 	// corrupt model surfaces loudly at startup.
 	if t.longAudio && !t.disableVADChunking {
 		vadPath := opts.Boundary.VADModelPath
@@ -593,7 +593,7 @@ func (t *Transcriber) transcribe(ctx context.Context, audioData []byte, format, 
 	// Decode window by window. Adjacent windows share an overlap, so window i+1's
 	// first few tokens are held and compared against window i's tail before they
 	// are emitted, dropping seam duplicates and letting the earlier (warmed-up)
-	// window win text collisions (see DD-014). Held tokens are released in order
+	// window win text collisions. Held tokens are released in order
 	// before the rest of the window streams, so streaming order is preserved.
 	var tokens []decodedToken
 	var prevTail []decodedToken
@@ -634,7 +634,7 @@ func (t *Transcriber) transcribe(ctx context.Context, audioData []byte, format, 
 // newBoundaryOracle builds the per-request chunk-boundary cascade over this
 // request's mel features and waveform: Silero VAD first (when enabled and the
 // model loaded), then smoothed mel energy (when enabled), then the arithmetic
-// midpoint as the always-decides fallback. See DD-014.
+// midpoint as the always-decides fallback.
 func (t *Transcriber) newBoundaryOracle(features [][]float32, waveform []float32) boundaryOracle {
 	var oracles []boundaryOracle
 	if !t.disableVADChunking && t.vad != nil {

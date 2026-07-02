@@ -5,7 +5,7 @@ package asr
 
 import "log/slog"
 
-// This file implements the chunk-boundary selection stack described in DD-014.
+// This file implements the chunk-boundary selection stack for long-audio mode.
 //
 // When long-audio mode splits an utterance into overlapping windows, the shared
 // overlap between two neighbours must be split at a single mel-frame index that
@@ -79,7 +79,8 @@ func (midpointBoundaryOracle) boundary(r overlapRegion) (int64, bool) {
 // value when it has features, so it is the robust fallback when the VAD is
 // disabled or unavailable. Loud, dynamic music defeats the energy heuristic
 // (there is no quiet frame), in which case this degrades to roughly midpoint
-// quality; the VAD layer is the robust answer there (see DD-014).
+// quality; the VAD layer is the robust answer there, since it was trained to
+// tell speech from sound rather than measuring loudness.
 type melEnergyBoundaryOracle struct {
 	smoothed []float64
 }
