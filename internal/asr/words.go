@@ -22,7 +22,7 @@ type Word struct {
 // leading space in the vocab entry); punctuation and continuation tokens attach
 // to the preceding word.
 func (t *Transcriber) TranscribeWords(ctx context.Context, audioData []byte, format, language string) ([]Word, error) {
-	tokens, err := t.transcribe(ctx, audioData, format, language, nil)
+	tokens, _, err := t.transcribe(ctx, audioData, format, language, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -32,7 +32,7 @@ func (t *Transcriber) TranscribeWords(ctx context.Context, audioData []byte, for
 // TranscribeWordsSamples transcribes already-loaded mono 16 kHz samples and
 // returns each word with its start and end times.
 func (t *Transcriber) TranscribeWordsSamples(ctx context.Context, samples []float32) ([]Word, error) {
-	tokens, err := t.transcribeSamples(ctx, samples, nil)
+	tokens, _, err := t.transcribeSamples(ctx, samples, nil)
 	if err != nil {
 		return nil, err
 	}

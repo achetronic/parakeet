@@ -76,6 +76,8 @@ parakeet/
 │   │   ├── vad.go          # Silero VAD ONNX session wrapper (shared, stateful via tensors)
 │   │   ├── seam.go         # Seam-level token dedup (absolute-timestep based)
 │   │   ├── words.go        # Word-level timestamps (Word + TranscribeWordsSamples)
+│   │   ├── segments.go     # Timed segments built from decoder token positions
+│   │   ├── segments_test.go # Segment split rules, caps, timing, logProb tests
 │   │   └── provider_test.go # Execution-provider parsing/selection tests
 │   ├── diarization/        # Nemotron-3-Diarization (speaker diarization)
 │   │   ├── config.go       # Model config loader
@@ -90,7 +92,8 @@ parakeet/
 │       ├── server.go       # HTTP server, route setup, lifecycle management
 │       ├── handlers.go     # API endpoint handlers, response formatting
 │       ├── merge.go        # Diarization + ASR word merge into speaker turns
-│       └── types.go        # Request/response type definitions
+│       ├── types.go        # Request/response type definitions
+│       └── response_test.go # Segment mapping, SRT/VTT cue rendering, timestamps
 ├── models/                 # ONNX models (downloaded separately, incl. silero_vad.onnx)
 ├── testdata/
 │   └── reference/          # Issue #18 reproduction audio + reference transcripts
@@ -134,18 +137,18 @@ parakeet/
 
 #### `handlers.go`
 
-- `handleTranscription()` - Main endpoint, parses multipart form, returns transcription. Maps `audio.ErrUnsupportedAudio` to HTTP 400 `invalid_request_error`; other errors fall back to HTTP 500 `server_error`.
+- `handleTranscription()` - Main endpoint, parses multipart form, returns transcription. Uses `TranscribeDetailed` so `verbose_json`, `srt` and `vtt` carry real per-segment timings. Maps `audio.ErrUnsupportedAudio` to HTTP 400 `invalid_request_error`; other errors fall back to HTTP 500 `server_error`.
 - `handleDiarizedTranscription()` - Diarization path (`diarize=true`): loads audio once, transcribes word timestamps, diarizes, and merges into speaker turns.
 - `handleTranslation()` - Delegates to transcription (Parakeet is English-focused)
 - `handleModels()` - Returns available models (parakeet-tdt-0.6b, whisper-1 alias)
 - `handleHealth()` - Health check endpoint
-- Response format helpers: `formatSRTTime()`, `formatVTTTime()`
+- Response format helpers: `toAPISegments()`, `compressionRatio()`, `renderSRT()`, `renderVTT()`, `formatSRTTime()`, `formatVTTTime()`
 - CORS and error response utilities
 
 #### `types.go`
 
 - `TranscriptionResponse` - Simple JSON response with text
-- `VerboseTranscriptionResponse` - Detailed response with segments, timing
+- `VerboseTranscriptionResponse` - Detailed response with segments, timing (`segments` has no `omitempty`: the key is always present)
 - `Segment` - Transcription segment with timing info
 - `SpeakerTurn` - Speaker-attributed turn (`speaker`, `start`, `end`, `text`)
 - `DiarizedTranscriptionResponse` - Returned when `diarize=true`; `segments` = speaker turns
@@ -172,10 +175,24 @@ parakeet/
 - `decoderWorker` - Holds a persistent decoder ONNX session with pre-allocated reusable tensors; `newDecoderWorker` takes the shared `*ort.SessionOptions`
 - `Transcriber` - Main inference struct holding a long-lived encoder `*ort.DynamicAdvancedSession`, a pool of `decoderWorker`s, and an optional `*audio.Converter`
 - `NewTranscriber(modelsDir, workers, opts)` - Loads config, vocab, initializes ONNX Runtime, builds execution-provider session options, creates the shared encoder session and decoder pool
-- `Transcribe()` - Main entry: audio -> mel -> encoder -> TDT decode -> text
+- `Transcribe()` - Main entry: audio -> mel -> encoder -> TDT decode -> text. Returns just the text.
+- `TranscribeDetailed()` - Same single pass, returns `Result{Text, Duration, Segments}`. Used by the HTTP handler.
+- `TranscribeStream()` - Same pass with an `emit` callback for SSE deltas. Returns just the text.
+- `Result` - `{Text, Duration, Segments}`; `Duration` is seconds measured from the decoded waveform (`len(waveform) / SampleRate()`), never from the uploaded byte count.
+- `encoderFrameSeconds()` - Converts an encoder frame to seconds (`subsampling * hop / sample rate`, 0.08 s for the shipped model). Returns 0 when the configuration is unusable, which `buildSegments` reads as "no timing available".
 - `runInference()` - Runs the shared long-lived encoder session (variable-shape tensors supplied per `Run()`), then acquires a pool worker for decode
-- `tdtDecode()` - TDT greedy decoding loop reusing pooled session and tensors
+- `tdtDecode()` - TDT greedy decoding loop reusing pooled session and tensors. Emits `decodedToken` values carrying timestep, predicted frame span, and log probability.
 - `tokensToText()` - Token IDs to text with cleanup
+- `logProb(logits, idx)` - `logit - logsumexp(logits)`; works whether the TDT head exports raw logits or log-probabilities. Computed only for emitted tokens.
+
+#### `segments.go` (Timed Segments)
+
+- `Segment` - `{Start, End, Text, Tokens, AvgLogprob}` in seconds, built from the decoder's own token positions.
+- `buildSegments(tokens, textOf, frameSeconds, duration)` - Groups the emitted token list into timed segments. Closes a segment on sentence punctuation, on a silence gap over `segmentGapFrames`, at `segmentMaxTokens`, or at `segmentMaxFrames`.
+- `endsSentence(text)` - Sentence-final punctuation check (`.`, `!`, `?`, `…`), ignoring trailing spaces.
+- `segmentFromTokens()` - Renders one token run into a `Segment`; `End` is the last token's timestep plus its predicted frame span, clamped to `duration`.
+- Tuning constants `segmentGapFrames` (8 frames, ~0.64 s), `segmentMaxTokens` (220), `segmentMaxFrames` (375 frames, 30 s) are named constants, deliberately NOT flags (same rule as DD-014).
+- This is a REPORTING layer over tokens the decoder already produced. It does not segment, skip, or re-window the audio the model sees; DD-014's rejection of full-file VAD segmentation still holds.
 
 #### `words.go`
 
@@ -229,7 +246,7 @@ parakeet/
 - `file` (required) - Audio file (multipart form, max 25MB)
 - `model` - Accepted but ignored (only one model)
 - `language` - ISO-639-1 code (default: "en")
-- `response_format` - json, text, srt, vtt, verbose_json (default: "json")
+- `response_format` - json, text, srt, vtt, verbose_json (default: "json"). srt, vtt and verbose_json carry per-segment timings.
 - `prompt`, `temperature` - Accepted but ignored
 - `diarize` - When `true`, returns speaker-attributed turns (`verbose_json`-style with a `speaker` field per segment); requires the server to be started with `-enable-diarization`
 
@@ -259,6 +276,8 @@ parakeet/
 
 - JSON structs use tags: `json:"field_name"` with `omitempty` where appropriate
 - OpenAI-compatible response structures
+- Do not put `omitempty` on a field OpenAI clients expect to exist. `VerboseTranscriptionResponse.Segments` is always emitted, as an empty array when there is nothing to report
+- Report a field honestly or leave it at its neutral value with a comment saying why. Placeholder constants that look plausible (`avg_logprob: -0.5`) are worse than a documented zero
 
 ## Environment Variables
 
@@ -349,6 +368,7 @@ No other external Go dependencies. Standard library used for HTTP, JSON, audio p
 - LSTM state: `internal/asr/transcriber.go:314-315` (`stateDim`, `numLayers`)
 - Max tokens per step: `internal/asr/transcriber.go:39` (`maxTokensPerStep: 10`)
 - Mel features: `internal/mel/mel.go` (`New(nMels, sampleRate, nFFT, hopLength, winLength)`)
+- Segment splitting: `internal/asr/segments.go` (`segmentGapFrames`, `segmentMaxTokens`, `segmentMaxFrames`)
 
 ### Adding a New Makefile Target
 
@@ -386,6 +406,14 @@ No other external Go dependencies. Standard library used for HTTP, JSON, audio p
 - With `-long-audio`, audio over the model's frame limit is split into overlapping windows. Each overlap's emission boundary is placed on silence by a cascade: Silero VAD, then smoothed mel energy, then the arithmetic midpoint (see DD-014).
 - A second always-on safety net (`dedupSeam`) removes duplicate/colliding tokens right at each seam, using absolute encoder-frame timesteps; the earlier (warmed-up) window wins collisions.
 - Tuning constants (VAD threshold, tolerances, smoothing) are named constants in `boundary.go`/`seam.go`, deliberately NOT flags. Flags only toggle whole layers (`-disable-vad-based-chunking`, `-disable-mel-based-chunking`) and the VAD model path (`-vad-model-path`).
+
+### Segments and Timing
+
+- Segment times come from the decoder's own token timesteps and duration predictions, converted with `encoderFrameSeconds()` (0.08 s per encoder frame for the shipped model). They are not forced alignment like Whisper's, and they are not faked: if the model produced no tokens, `segments` is an empty array.
+- `duration` is measured from the decoded waveform. Never reintroduce a formula based on the uploaded byte count; it is wrong for every compressed format.
+- `temperature` and `no_speech_prob` are reported as 0 because greedy TDT decoding has neither a temperature nor a no-speech head. They stay in the payload so OpenAI-schema clients do not hit a missing key.
+- Streaming (`stream=true`) carries text deltas only. OpenAI's SSE transcription protocol has no segment events, so segments are not emitted there.
+- See DD-015.
 
 ### Tensor Memory Management
 

@@ -134,6 +134,13 @@ func (f *Filterbank) HopLength() int {
 	return f.hopLength
 }
 
+// SampleRate returns the sample rate the filterbank was built for, which is the
+// rate every waveform reaching Extract is resampled to. It pairs with HopLength
+// (or FramesPerSecond) to turn frame counts back into wall-clock seconds.
+func (f *Filterbank) SampleRate() int {
+	return f.sampleRate
+}
+
 // Extract computes log-mel filterbank features from audio samples, matching
 // NeMo's AudioToMelSpectrogramPreprocessor (center=True, snip_edges=False):
 // the waveform is pre-emphasised, zero-padded by nFFT/2 on both sides, and
