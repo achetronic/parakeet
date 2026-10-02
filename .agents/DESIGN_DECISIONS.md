@@ -272,3 +272,47 @@ Loud or dynamic music has no quiet frame, so the mel-energy layer degrades to ro
 - New files: `internal/asr/boundary.go` (oracle stack), `internal/asr/vad.go` (Silero session), `internal/asr/seam.go` (dedup). `chunker.go` gains `planChunksWithBoundaries`/`planForAudioWithBoundaries`; `transcriber.go` threads absolute timesteps, the seam buffer, and the per-request oracle chain.
 - `silero_vad.onnx` is a new required-for-VAD model file; its absence is a graceful degrade, not a failure.
 - Reference reproduction material (the issue #18 MP3 plus `.srt`/`.vtt`/`.txt`) lives in `testdata/reference/`, with a build-tag-gated Go seam inspector (`-tags=seaminspect`) that prints transcribed vs reference text around every seam. No Python, no network.
+
+## DD-015: Real Timed Segments From Decoder Token Positions
+
+**Context**: `verbose_json` used to return a hardcoded single segment spanning `0` to `duration`, with `tokens: []`, `avg_logprob: -0.5`, `compression_ratio: 1.0` and `no_speech_prob: 0` as fixed placeholders, and `srt`/`vtt` emitted one cue covering the whole file. Worse, `duration` was `len(uploadedBytes) / (16000*2)`: for a compressed input that number has nothing to do with how long the audio plays (a 820 KB MP3 reported 25.6 s for roughly 40 s of speech). Clients asking for segment timings got a shape that looked OpenAI-compatible and was fabricated.
+
+**Decision**: Report real segments derived from information the decoder already produces, and measure duration from the decoded waveform. `tdtDecode` already tags every emitted token with its absolute encoder-frame timestep and reads the duration head's frame-count prediction; `tokensToText` threw both away. `decodedToken` now also carries `frames` (the predicted span, at least 1) and `logprob` (log probability of the greedy pick), and `buildSegments` (`internal/asr/segments.go`) groups the token list into timed `Segment` values.
+
+**This is a reporting layer, not audio segmentation.** The model still sees the same waveform it always saw. Nothing is skipped, re-windowed, or VAD-gated; DD-014's rejection of full-file VAD segmentation stands. Segments are a grouping of tokens that were already emitted, in decode order, over the full audio.
+
+### Timing basis
+
+One encoder frame covers `subsampling * mel hop / sample rate` seconds (`Transcriber.encoderFrameSeconds`): `8 * 160 / 16000 = 0.08 s`, i.e. 12.5 frames per second for the shipped model. A token's span is `[timestep, timestep + frames)`. `buildSegments` closes a segment before the current token when any of these holds:
+
+1. the gap from the previous token's end exceeds `segmentGapFrames` (8 frames, ~0.64 s),
+2. the previous token's text ended a sentence (`.`, `!`, `?`, `…`),
+3. the segment already holds `segmentMaxTokens` (220, mirroring whisper.cpp's `max_seg_len`),
+4. adding the token would span `segmentMaxFrames` (375 frames, 30 s).
+
+All four are named constants with comments, deliberately NOT flags, matching the DD-014 rule that tuning lives in code and flags only toggle whole features. Tokens with no printable text are dropped, the same rule `tokenText` applies to the transcript, so segment texts concatenate back to `text` exactly.
+
+**Why these rules**: sentence punctuation is what a listener reads as a segment boundary and is free. The silence gap catches the sentences speakers never punctuate out loud. The token and span caps keep a punctuation-free monologue from becoming one giant cue. No threshold is user-tunable because there is no evidence yet that the defaults are wrong for real workloads; making them flags would invite tuning nobody has measured.
+
+### Duration
+
+`transcribe` now measures `duration` as `len(waveform) / mel.SampleRate()`. `loadAudio` always resamples to 16 kHz mono, so this is the true decoded length for every input format, compressed or not. The byte-count formula is gone.
+
+### Pipeline shape
+
+`transcribe` returns a `Result{Text, Duration, Segments}`. `Transcribe` and `TranscribeStream` unwrap it to the text they always returned, so no existing caller or test changed behaviour; `TranscribeDetailed` is the new entry point the HTTP handler uses. One inference pass produces both views, so the transcript and its segments can never disagree.
+
+### OpenAI field fidelity
+
+`avg_logprob` is now the mean log probability of the segment's tokens (`logProb` computes `logit - logsumexp(logits)`; the TDT head may export raw logits or log-probabilities and logsumexp handles both). `compression_ratio` is `len(text) / len(gzip(text))`, the same redundancy metric OpenAI reports. `seek` is the segment start in milliseconds, matching OpenAI's documented unit. `temperature` stays 0 (greedy decoding) and `no_speech_prob` stays 0 because TDT has no no-speech head; both are reported rather than omitted so clients parsing the OpenAI schema do not trip on a missing key. `Segments` lost its `omitempty` so `verbose_json` always carries the key, even for a silent file.
+
+`srt` and `vtt` now write one cue per segment. `formatSRTTime`/`formatVTTTime` were rewritten to round to whole milliseconds once and then split fields: the old per-field truncation rendered 1.2 s as `01,199` (because `1.2 - 1` is `0.19999999999999998` in binary floating point) and could not carry 59.9996 s into the next minute. With arbitrary segment times that bug became visible on every cue.
+
+**Consequences**:
+
+- New file `internal/asr/segments.go`; `segments_test.go` covers the split rules, both caps, dropped tokens, duration clamping, the transcript/segment agreement invariant, and `logProb`.
+- `decodedToken` gained `frames` and `logprob`. `dedupSeam` ignores them, so seam behaviour is unchanged.
+- `MelFilterbank` gained `SampleRate()` alongside the existing `HopLength()`.
+- `internal/server/handlers.go` gained `toAPISegments`, `compressionRatio`, `renderSRT`, `renderVTT`; `response_test.go` covers the mapping, the always-present `segments` key, cue rendering, and the timestamp rounding fix.
+- Streaming (`stream=true`) is unchanged: OpenAI's SSE protocol carries text deltas, not segments.
+- Segment boundaries are heuristic. A mis-predicted duration span shifts a segment edge by up to a frame or two (80 ms), which is well inside what a subtitle reader tolerates but is not a forced alignment like Whisper's.

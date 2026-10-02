@@ -99,6 +99,13 @@ func (m *MelFilterbank) HopLength() int {
 	return m.hopLength
 }
 
+// SampleRate returns the sample rate the filterbank was built for, which is the
+// rate every waveform reaching Extract is resampled to. It pairs with
+// HopLength to turn frame counts back into seconds.
+func (m *MelFilterbank) SampleRate() int {
+	return m.sampleRate
+}
+
 // Extract computes mel filterbank features from audio samples
 func (m *MelFilterbank) Extract(samples []float32) [][]float32 {
 	numFrames := (len(samples)-m.winLength)/m.hopLength + 1

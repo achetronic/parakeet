@@ -24,6 +24,7 @@
   - [Model Files](#model-files)
 - [API Reference](#api-reference)
   - [Transcribe Audio](#transcribe-audio)
+  - [Segments and timing](#segments-and-timing)
   - [Streaming](#streaming)
 - [Development](#development)
 - [Troubleshooting](#troubleshooting)
@@ -42,6 +43,7 @@ Key features:
 - No Python dependency at runtime (ffmpeg is an optional system dependency for non-WAV audio)
 - Structured logging with `slog` (text and JSON formats, configurable log level)
 - Support for multiple response formats (JSON, text, SRT, VTT)
+- Timed segments in `verbose_json`, and one SRT/VTT cue per segment, derived from the decoder's own token positions
 - Multilingual support (English and 25+ languages)
 - Quantized model support for reduced memory footprint
 - Automatic audio conversion for non-WAV formats (MP3, OGG, WebM, FLAC, M4A, AAC, Opus, ...) when ffmpeg is installed
@@ -420,7 +422,7 @@ Content-Type: `multipart/form-data`
 | `file`            | file   | Yes      | Audio file (WAV always supported; MP3/OGG/WebM/FLAC/M4A/AAC/Opus via ffmpeg, max 25MB) |
 | `model`           | string | No       | Model name (accepted but ignored)                                                      |
 | `language`        | string | No       | ISO-639-1 language code (default: en)                                                  |
-| `response_format` | string | No       | Output format: json, text, srt, vtt, verbose_json                                      |
+| `response_format` | string | No       | Output format: json, text, srt, vtt, verbose_json (the last three carry per-segment timings) |
 | `stream`          | bool   | No       | When `true`, stream the transcription as Server-Sent Events (see Streaming below)      |
 | `prompt`          | string | No       | Accepted but ignored                                                                   |
 | `temperature`     | float  | No       | Accepted but ignored                                                                   |
@@ -441,18 +443,64 @@ Verbose JSON format:
 {
   "task": "transcribe",
   "language": "en",
-  "duration": 5.2,
-  "text": "transcribed text here",
+  "duration": 12.48,
+  "text": "I suppose I should take you back, really. I was twelve years old.",
   "segments": [
     {
       "id": 0,
-      "start": 0,
-      "end": 5.2,
-      "text": "transcribed text here"
+      "seek": 800,
+      "start": 0.8,
+      "end": 3.44,
+      "text": "I suppose I should take you back, really.",
+      "tokens": [412, 1093, 301, 288, 117, 2140, 7],
+      "temperature": 0,
+      "avg_logprob": -0.118,
+      "compression_ratio": 1.94,
+      "no_speech_prob": 0
+    },
+    {
+      "id": 1,
+      "seek": 4320,
+      "start": 4.32,
+      "end": 6.16,
+      "text": "I was twelve years old.",
+      "tokens": [301, 412, 1904, 604, 7],
+      "temperature": 0,
+      "avg_logprob": -0.071,
+      "compression_ratio": 1.62,
+      "no_speech_prob": 0
     }
   ]
 }
 ```
+
+#### Segments and timing
+
+`verbose_json` reports real segment timings, and `srt` / `vtt` emit one cue per
+segment rather than one block covering the whole file.
+
+The timings come from the decoder itself. TDT tags every emitted token with the
+encoder frame it was decoded at, plus the frame count its duration head
+predicted for it. The server groups those tokens into segments, closing one on
+sentence punctuation, on a silence gap of about 0.64 s, or at 220 tokens / 30 s,
+and converts frames to seconds with the model's own rate (12.5 encoder frames
+per second, 0.08 s each).
+
+What each field means:
+
+| Field               | Meaning                                                                     |
+| ------------------- | --------------------------------------------------------------------------- |
+| `duration`          | Audio length measured from the decoded waveform, not from the uploaded bytes |
+| `start` / `end`     | Segment bounds in seconds, `end` clamped to `duration`                       |
+| `seek`              | Segment start in milliseconds, matching OpenAI's field                       |
+| `tokens`            | SentencePiece token ids of the segment                                       |
+| `avg_logprob`       | Mean log probability the decoder assigned to the segment's tokens            |
+| `compression_ratio` | `len(text) / len(gzip(text))`, the same redundancy metric OpenAI reports     |
+| `temperature`       | 0: decoding is greedy                                                        |
+| `no_speech_prob`    | 0: the TDT decoder has no no-speech head                                     |
+
+Segment texts concatenate back to the `text` field, so the two views of the same
+transcription never disagree.
 
 **Example**
 

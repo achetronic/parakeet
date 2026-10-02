@@ -8,6 +8,7 @@ Pending tasks and improvements for the project.
 
 ## API Completeness
 
+- [x] **Real timed segments in `verbose_json`** — Segments are derived from the decoder's own token positions and duration predictions instead of one hardcoded synthetic segment; `duration` is measured from the decoded waveform rather than the uploaded byte count; `srt`/`vtt` emit one cue per segment. Implemented in `internal/asr/segments.go`. See DD-015.
 - [ ] **Implement `prompt` parameter** — Currently accepted but ignored in the transcription endpoint. Could be used for vocabulary biasing or context priming.
 - [ ] **Implement `temperature` parameter** — Currently accepted but ignored. Would require switching from greedy to sampled decoding in `tdtDecode()`.
 - [ ] **Proper translation support** — The `/v1/audio/translations` endpoint currently delegates to transcription. Parakeet is English-focused, so true translation would require a different model or pipeline.

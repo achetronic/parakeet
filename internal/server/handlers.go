@@ -4,12 +4,15 @@
 package server
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -143,8 +146,9 @@ func (s *Server) handleMultipartTranscription(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Transcribe
-	text, err := s.transcriber.Transcribe(r.Context(), audioData, ext, language)
+	// Transcribe. TranscribeDetailed gives the text plus the measured duration
+	// and the timed segments the decoder's token positions imply.
+	result, err := s.transcriber.TranscribeDetailed(r.Context(), audioData, ext, language)
 	if err != nil {
 		// Unsupported or malformed audio is a client error: the request
 		// body we received cannot be decoded. Everything else is treated
@@ -157,12 +161,12 @@ func (s *Server) handleMultipartTranscription(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	if asr.DebugMode {
-		slog.Debug("transcription result", "text", text)
-	}
+	text := result.Text
+	duration := result.Duration
 
-	// Calculate approximate duration (16kHz, 16-bit mono)
-	duration := float64(len(audioData)) / (16000.0 * 2)
+	if asr.DebugMode {
+		slog.Debug("transcription result", "text", text, "segments", len(result.Segments))
+	}
 
 	// Send response based on format
 	switch responseFormat {
@@ -172,15 +176,11 @@ func (s *Server) handleMultipartTranscription(w http.ResponseWriter, r *http.Req
 
 	case "srt":
 		w.Header().Set("Content-Type", "text/plain")
-		// Simple SRT format
-		srt := fmt.Sprintf("1\n00:00:00,000 --> %s\n%s\n", formatSRTTime(duration), text)
-		w.Write([]byte(srt))
+		w.Write([]byte(renderSRT(result.Segments)))
 
 	case "vtt":
 		w.Header().Set("Content-Type", "text/vtt")
-		// Simple WebVTT format
-		vtt := fmt.Sprintf("WEBVTT\n\n00:00:00.000 --> %s\n%s\n", formatVTTTime(duration), text)
-		w.Write([]byte(vtt))
+		w.Write([]byte(renderVTT(result.Segments)))
 
 	case "verbose_json":
 		w.Header().Set("Content-Type", "application/json")
@@ -189,20 +189,7 @@ func (s *Server) handleMultipartTranscription(w http.ResponseWriter, r *http.Req
 			Language: language,
 			Duration: duration,
 			Text:     text,
-			Segments: []Segment{
-				{
-					ID:               0,
-					Seek:             0,
-					Start:            0,
-					End:              duration,
-					Text:             text,
-					Tokens:           []int{},
-					Temperature:      0,
-					AvgLogprob:       -0.5,
-					CompressionRatio: 1.0,
-					NoSpeechProb:     0.0,
-				},
-			},
+			Segments: toAPISegments(result.Segments),
 		}
 		json.NewEncoder(w).Encode(resp)
 
@@ -342,19 +329,98 @@ func sendError(w http.ResponseWriter, message, errType string, status int) {
 }
 
 // formatSRTTime formats duration as SRT timestamp
+//
+// Seconds are converted to whole milliseconds by rounding once, then split into
+// fields. Truncating each field separately would render 1.2 s as 01,199 (because
+// 1.2-1 is 0.19999999999999998 in binary floating point) and would fail to carry
+// 59.9996 s into the next minute.
 func formatSRTTime(seconds float64) string {
-	hours := int(seconds) / 3600
-	minutes := (int(seconds) % 3600) / 60
-	secs := int(seconds) % 60
-	millis := int((seconds - float64(int(seconds))) * 1000)
-	return fmt.Sprintf("%02d:%02d:%02d,%03d", hours, minutes, secs, millis)
+	millis := int64(math.Round(seconds * 1000))
+	if millis < 0 {
+		millis = 0
+	}
+	return fmt.Sprintf("%02d:%02d:%02d,%03d",
+		millis/3600000, (millis%3600000)/60000, (millis%60000)/1000, millis%1000)
 }
 
-// formatVTTTime formats duration as WebVTT timestamp
+// formatVTTTime formats duration as WebVTT timestamp, with the same rounding and
+// carrying as formatSRTTime.
 func formatVTTTime(seconds float64) string {
-	hours := int(seconds) / 3600
-	minutes := (int(seconds) % 3600) / 60
-	secs := int(seconds) % 60
-	millis := int((seconds - float64(int(seconds))) * 1000)
-	return fmt.Sprintf("%02d:%02d:%02d.%03d", hours, minutes, secs, millis)
+	millis := int64(math.Round(seconds * 1000))
+	if millis < 0 {
+		millis = 0
+	}
+	return fmt.Sprintf("%02d:%02d:%02d.%03d",
+		millis/3600000, (millis%3600000)/60000, (millis%60000)/1000, millis%1000)
+}
+
+// toAPISegments maps the timed segments produced by the decoder onto the
+// OpenAI-shaped response. Seek is the segment start in milliseconds, which is
+// what OpenAI documents for that field. Temperature is 0 because decoding is
+// greedy, and NoSpeechProb is 0 because the TDT decoder has no no-speech head;
+// both are reported rather than omitted so clients parsing the OpenAI schema do
+// not trip on a missing key.
+func toAPISegments(segments []asr.Segment) []Segment {
+	out := make([]Segment, 0, len(segments))
+	for i, seg := range segments {
+		tokens := seg.Tokens
+		if tokens == nil {
+			tokens = []int{}
+		}
+		out = append(out, Segment{
+			ID:               i,
+			Seek:             int(math.Round(seg.Start * 1000)),
+			Start:            seg.Start,
+			End:              seg.End,
+			Text:             seg.Text,
+			Tokens:           tokens,
+			Temperature:      0,
+			AvgLogprob:       seg.AvgLogprob,
+			CompressionRatio: compressionRatio(seg.Text),
+			NoSpeechProb:     0,
+		})
+	}
+	return out
+}
+
+// compressionRatio returns len(text) / len(gzip(text)), the same redundancy
+// metric OpenAI reports for a segment. An empty string reports 1.0 rather than
+// a division by zero.
+func compressionRatio(text string) float64 {
+	if text == "" {
+		return 1.0
+	}
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	if _, err := gw.Write([]byte(text)); err != nil {
+		return 1.0
+	}
+	if err := gw.Close(); err != nil {
+		return 1.0
+	}
+	if buf.Len() == 0 {
+		return 1.0
+	}
+	return float64(len(text)) / float64(buf.Len())
+}
+
+// renderSRT writes one subtitle cue per segment. Cue numbering follows segment
+// order, so a transcript with no speech produces an empty file rather than a
+// single empty cue.
+func renderSRT(segments []asr.Segment) string {
+	var b strings.Builder
+	for i, seg := range segments {
+		fmt.Fprintf(&b, "%d\n%s --> %s\n%s\n\n", i+1, formatSRTTime(seg.Start), formatSRTTime(seg.End), seg.Text)
+	}
+	return b.String()
+}
+
+// renderVTT writes one WebVTT cue per segment under the required header.
+func renderVTT(segments []asr.Segment) string {
+	var b strings.Builder
+	b.WriteString("WEBVTT\n\n")
+	for _, seg := range segments {
+		fmt.Fprintf(&b, "%s --> %s\n%s\n\n", formatVTTTime(seg.Start), formatVTTTime(seg.End), seg.Text)
+	}
+	return b.String()
 }

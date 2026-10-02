@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -522,7 +523,24 @@ func (t *Transcriber) Close() {
 	ort.DestroyEnvironment()
 }
 
+// Result is one transcription: the full text, the audio length measured from the
+// decoded waveform, and timed segments derived from the decoder's token
+// positions. Duration is in seconds.
+type Result struct {
+	Text     string
+	Duration float64
+	Segments []Segment
+}
+
 func (t *Transcriber) Transcribe(ctx context.Context, audioData []byte, format, language string) (string, error) {
+	result, err := t.transcribe(ctx, audioData, format, language, nil)
+	return result.Text, err
+}
+
+// TranscribeDetailed is Transcribe plus the measured duration and the timed
+// segments the decoder's token positions imply. It runs the identical pipeline;
+// the only difference is that it returns the whole Result instead of the text.
+func (t *Transcriber) TranscribeDetailed(ctx context.Context, audioData []byte, format, language string) (Result, error) {
 	return t.transcribe(ctx, audioData, format, language, nil)
 }
 
@@ -535,38 +553,45 @@ func (t *Transcriber) Transcribe(ctx context.Context, audioData []byte, format, 
 // concatenation by surrounding/duplicate spaces only.
 // emit is always called from the same goroutine that called TranscribeStream.
 func (t *Transcriber) TranscribeStream(ctx context.Context, audioData []byte, format, language string, emit func(delta string)) (string, error) {
-	return t.transcribe(ctx, audioData, format, language, emit)
+	result, err := t.transcribe(ctx, audioData, format, language, emit)
+	return result.Text, err
 }
 
 // transcribe is the shared implementation. When emit is non-nil, decoded text
 // is streamed delta by delta as tokens are produced.
-func (t *Transcriber) transcribe(ctx context.Context, audioData []byte, format, language string, emit func(delta string)) (string, error) {
+func (t *Transcriber) transcribe(ctx context.Context, audioData []byte, format, language string, emit func(delta string)) (Result, error) {
 	// Let's check context immediately
 	select {
 	case <-ctx.Done():
-		return "", ctx.Err()
+		return Result{}, ctx.Err()
 	default:
 	}
 
 	waveform, err := t.loadAudio(audioData, format)
 	if err != nil {
-		return "", fmt.Errorf("failed to load audio: %w", err)
+		return Result{}, fmt.Errorf("failed to load audio: %w", err)
 	}
 
+	// Duration is measured from the decoded waveform, which loadAudio always
+	// resamples to the mel front end's rate. Deriving it from the uploaded byte
+	// count instead would be wrong for every compressed input: an MP3's size
+	// says nothing about how long it plays.
+	duration := float64(len(waveform)) / float64(t.mel.SampleRate())
+
 	if DebugMode {
-		slog.Debug("waveform loaded", "samples", len(waveform), "seconds", float64(len(waveform))/16000.0)
+		slog.Debug("waveform loaded", "samples", len(waveform), "seconds", duration)
 	}
 
 	if len(waveform) < 1600 {
 		if DebugMode {
 			slog.Debug("audio too short, skipping", "samples", len(waveform))
 		}
-		return "", nil
+		return Result{Duration: duration}, nil
 	}
 
 	features := t.mel.Extract(waveform)
 	if len(features) == 0 {
-		return "", fmt.Errorf("no features extracted")
+		return Result{Duration: duration}, fmt.Errorf("no features extracted")
 	}
 
 	if DebugMode {
@@ -583,7 +608,7 @@ func (t *Transcriber) transcribe(ctx context.Context, audioData []byte, format, 
 		slog.Warn("audio exceeds the single-pass model limit; enable --long-audio to transcribe long files in overlapping chunks",
 			"seconds", float64(len(features))/float64(t.mel.FramesPerSecond()),
 			"limitSeconds", float64(modelMaxEncoderFrames*subsampling)/float64(t.mel.FramesPerSecond()))
-		return "", err
+		return Result{Duration: duration}, err
 	}
 
 	if DebugMode {
@@ -618,7 +643,7 @@ func (t *Transcriber) transcribe(ctx context.Context, audioData []byte, format, 
 
 		windowTokens, err := t.runInference(ctx, features[win.start:win.end], emitStart, emitEnd, frameOffset, holdFirst, resolveSeam, emit)
 		if err != nil {
-			return "", fmt.Errorf("inference failed: %w", err)
+			return Result{Duration: duration}, fmt.Errorf("inference failed: %w", err)
 		}
 		tokens = append(tokens, windowTokens...)
 		prevTail = windowTokens
@@ -628,7 +653,32 @@ func (t *Transcriber) transcribe(ctx context.Context, audioData []byte, format, 
 		slog.Debug("tokens decoded", "count", len(tokens))
 	}
 
-	return t.tokensToText(tokens), nil
+	// The same token list produces both outputs: tokensToText flattens it into
+	// the transcript, buildSegments groups it into timed segments. Segment texts
+	// therefore concatenate back to the transcript.
+	text := t.tokensToText(tokens)
+	segments := buildSegments(tokens, t.tokenText, t.encoderFrameSeconds(), duration)
+
+	if DebugMode {
+		slog.Debug("segments built", "count", len(segments), "duration", duration)
+	}
+
+	return Result{Text: text, Duration: duration, Segments: segments}, nil
+}
+
+// encoderFrameSeconds converts one encoder frame to seconds. The mel front end
+// yields sampleRate/hopLength frames per second and the Conformer subsamples by
+// config.SubsamplingFactor, so a frame covers subsampling*hop/sampleRate seconds:
+// 8 * 160 / 16000 = 0.08 s (12.5 frames per second) for the shipped model.
+// Returns 0 when the configuration is unusable, which buildSegments treats as
+// "no timing available" rather than inventing a rate.
+func (t *Transcriber) encoderFrameSeconds() float64 {
+	hop := t.mel.HopLength()
+	sampleRate := t.mel.SampleRate()
+	if hop <= 0 || sampleRate <= 0 || t.config.SubsamplingFactor <= 0 {
+		return 0
+	}
+	return float64(t.config.SubsamplingFactor) * float64(hop) / float64(sampleRate)
 }
 
 // newBoundaryOracle builds the per-request chunk-boundary cascade over this
@@ -866,7 +916,20 @@ func (t *Transcriber) tdtDecode(ctx context.Context, encoderOut []float32, encod
 			// Collect and stream only tokens this window owns; the rest belong
 			// to an adjacent window's overlap and would duplicate speech.
 			if timestep >= emitStart && timestep < emitEnd {
-				dt := decodedToken{id: token, timestep: frameOffset + timestep}
+				// The duration head predicts how many encoder frames this token
+				// covers. step 0 means "keep decoding at this timestep", so a
+				// token always covers at least one frame. buildSegments turns
+				// timestep+frames into the token's end time.
+				frames := int64(step)
+				if frames < 1 {
+					frames = 1
+				}
+				dt := decodedToken{
+					id:       token,
+					timestep: frameOffset + timestep,
+					frames:   frames,
+					logprob:  logProb(vocabLogits, token),
+				}
 				if resolved {
 					result = append(result, dt)
 					emitText(dt.id)
@@ -923,6 +986,31 @@ func argmax(data []float32) int {
 		}
 	}
 	return maxIdx
+}
+
+// logProb returns the log probability of index idx under the decoder's output
+// distribution over the vocabulary. The TDT head may export raw logits or
+// log-probabilities: logsumexp normalises the first case and is ~0 for the
+// second, so the result is a log probability either way. It is computed only for
+// tokens that are actually emitted, not for every decode step.
+func logProb(logits []float32, idx int) float32 {
+	if len(logits) == 0 || idx < 0 || idx >= len(logits) {
+		return 0
+	}
+	max := logits[0]
+	for _, v := range logits {
+		if v > max {
+			max = v
+		}
+	}
+	sum := 0.0
+	for _, v := range logits {
+		sum += math.Exp(float64(v) - float64(max))
+	}
+	if sum <= 0 {
+		return 0
+	}
+	return float32(float64(logits[idx]) - float64(max) - math.Log(sum))
 }
 
 // tokenText returns the printable text for a token id, or "" for unknown tokens
