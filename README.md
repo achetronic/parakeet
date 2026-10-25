@@ -285,6 +285,54 @@ memory and fail with an ONNX Runtime allocation error. Segment long audio (for
 example with `ffmpeg -i in.wav -f segment -segment_time 300 -ar 16000 -ac 1
 chunk_%03d.wav`) or use a CPU image, which is bounded by system RAM instead.
 
+### GPU Inference (ROCm / AMD)
+
+Parakeet can also offload inference to AMD GPUs through the ONNX Runtime
+ROCm execution provider (`-gpu rocm`). GPU support ships as a dedicated
+image with the `-rocm` tag suffix; it bundles the ROCm build of ONNX
+Runtime and the fp32 models on an AMD ROCm base image.
+
+**Prerequisites:** an AMD GPU with the `amdgpu` kernel driver, and container
+access to `/dev/kfd` and `/dev/dri`. The ROCm image is `linux/amd64` only.
+
+```bash
+docker run -d \
+  --name parakeet \
+  --device /dev/kfd --device /dev/dri \
+  -p 5092:5092 \
+  ghcr.io/achetronic/parakeet:latest-rocm
+```
+
+For a non-Docker binary, point `ONNXRUNTIME_LIB` at a ROCm-enabled ONNX
+Runtime (e.g. extracted from the `onnxruntime_rocm` wheel) and pass
+`-gpu rocm`:
+
+```bash
+ONNXRUNTIME_LIB=/opt/onnxruntime/lib/libonnxruntime.so.1.22.1 \
+  ./parakeet -gpu rocm -gpu-device 0
+```
+
+**Version pinning.** The ROCm EP was last shipped in ONNX Runtime 1.22.x
+(AMD removed it in 1.23+ in favor of MIGraphX), so the ROCm image pins
+`onnxruntime_rocm` 1.22.1 on a ROCm 7.2 base. The Go binding is pinned to
+`v1.24.0`, the last release targeting ORT API 22.
+
+**Newer APUs (gfx1151 / Radeon 8060S "Strix Halo").** The wheel's
+precompiled Tensile kernels cover gfx900–gfx1201 but not gfx1151. The
+image sets `HSA_OVERRIDE_GFX_VERSION=11.0.0` so the runtime selects the
+ISA-compatible gfx1100 kernels; override or unset it for GPUs that ship
+their own kernels. Without the override, inference segfaults on gfx1151.
+
+**Measured performance** (Ryzen AI Max+ 395, 5-minute reference clip,
+fp32, 4 workers, warm): ~5–6 s on GPU vs ~16.7 s on CPU (int8) —
+roughly 3× faster, ~60× realtime. Transcripts agree with the CPU output
+at 97% word level (differences are punctuation-only).
+
+> [!NOTE]
+> Use fp32 models on GPU. int8 models run on the ROCm EP but most
+> quantized ops dequantize to fp32 on non-CUDA hardware, so int8 buys
+> nothing there (same guidance as the CUDA image).
+
 ## Configuration
 
 ### Command Line Flags
@@ -299,8 +347,8 @@ chunk_%03d.wav`) or use a CPU image, which is bounded by system RAM instead.
 | `-ffmpeg`                     | Enable ffmpeg fallback for non-WAV audio                                 | `true`                     | `-ffmpeg=false`                        |
 | `-ffmpeg-path`                | Path to the ffmpeg binary (empty = resolve from `PATH`)                  | ``                         | `-ffmpeg-path /usr/bin/ffmpeg`         |
 | `-ffmpeg-timeout`             | Maximum wall-clock time for a single ffmpeg conversion                   | `60s`                      | `-ffmpeg-timeout 30s`                  |
-| `-gpu`                        | Execution provider: `cpu` or `cuda`                                      | `cpu`                      | `-gpu cuda`                            |
-| `-gpu-device`                 | GPU device index for `cuda`                                              | `0`                        | `-gpu-device 1`                        |
+| `-gpu`                        | Execution provider: `cpu`, `cuda`, or `rocm`                           | `cpu`                      | `-gpu rocm`                            |
+| `-gpu-device`                 | GPU device index for `cuda`/`rocm`                                     | `0`                        | `-gpu-device 1`                        |
 | `-long-audio`                 | Split audio over the model limit into chunks instead of rejecting it     | `false`                    | `-long-audio`                          |
 | `-chunk-seconds`              | Sliding-window size for long audio, in seconds                           | `300`                      | `-chunk-seconds 240`                   |
 | `-chunk-overlap-seconds`      | Overlap between consecutive chunks, in seconds                           | `15`                       | `-chunk-overlap-seconds 10`            |

@@ -24,7 +24,7 @@ DOCKER_TAG ?= $(VERSION)
 MODELS_DIR := ./models
 
 .PHONY: all build clean test fmt vet lint run help
-.PHONY: docker-build-int8 docker-build-fp32 docker-build-cuda docker-run-int8 docker-run-fp32 docker-run-cuda docker-push
+.PHONY: docker-build-int8 docker-build-fp32 docker-build-cuda docker-build-rocm docker-run-int8 docker-run-fp32 docker-run-cuda docker-run-rocm docker-push
 .PHONY: models models-int8 models-fp32 models-silero-vad
 .PHONY: release release-linux release-darwin release-windows
 .PHONY: deps-onnxruntime
@@ -178,6 +178,13 @@ docker-run-fp32: ## Run Docker container with embedded fp32 models
 docker-run-cuda: ## Run CUDA/GPU Docker container (requires nvidia-container-toolkit)
 	docker run --rm --gpus all -p 5092:5092 $(DOCKER_IMAGE):$(DOCKER_TAG)-cuda
 
+docker-build-rocm: ## Build ROCm/AMD GPU Docker image with fp32 models (linux/amd64)
+	docker build -f Dockerfile.rocm --build-arg MODEL_PRECISION=fp32 -t $(DOCKER_IMAGE):$(DOCKER_TAG)-rocm .
+	docker tag $(DOCKER_IMAGE):$(DOCKER_TAG)-rocm $(DOCKER_IMAGE):latest-rocm
+
+docker-run-rocm: ## Run ROCm/AMD GPU Docker container (requires /dev/kfd and /dev/dri)
+	docker run --rm --device /dev/kfd --device /dev/dri -p 5092:5092 $(DOCKER_IMAGE):$(DOCKER_TAG)-rocm
+
 docker-push: ## Push Docker images to registry
 	docker push $(DOCKER_IMAGE):$(DOCKER_TAG)-int8
 	docker push $(DOCKER_IMAGE):$(DOCKER_TAG)-fp32
@@ -237,9 +244,11 @@ help: ## Show this help message
 	@echo "  \033[36mdocker-build-int8\033[0m   Build Docker image with int8 models"
 	@echo "  \033[36mdocker-build-fp32\033[0m   Build Docker image with fp32 models"
 	@echo "  \033[36mdocker-build-cuda\033[0m   Build CUDA/GPU image with fp32 models"
+	@echo "  \033[36mdocker-build-rocm\033[0m   Build ROCm/AMD GPU image with fp32 models"
 	@echo "  \033[36mdocker-run-int8\033[0m     Run Docker container with int8 models"
 	@echo "  \033[36mdocker-run-fp32\033[0m     Run Docker container with fp32 models"
 	@echo "  \033[36mdocker-run-cuda\033[0m     Run CUDA/GPU container (needs --gpus all)"
+	@echo "  \033[36mdocker-run-rocm\033[0m     Run ROCm/AMD GPU container (needs /dev/kfd + /dev/dri)"
 	@echo "  \033[36mdocker-push\033[0m         Push Docker images to registry"
 	@echo ""
 	@echo "\033[1mRelease:\033[0m"

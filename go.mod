@@ -2,4 +2,4 @@ module parakeet
 
 go 1.25.5
 
-require github.com/yalue/onnxruntime_go v1.30.1
+require github.com/yalue/onnxruntime_go v1.24.0

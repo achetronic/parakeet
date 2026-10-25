@@ -1,0 +1,143 @@
+# ROCm / AMD GPU image.
+#
+# Mirrors Dockerfile.cuda for AMD hardware: it ships the ROCm build of ONNX
+# Runtime (the onnxruntime_rocm wheel, which contains the ROCm execution
+# provider) on an AMD ROCm base image, and enables the `rocm` execution
+# provider by default.
+#
+# Version pinning: the ROCm execution provider was last shipped in ONNX
+# Runtime 1.22.x, built against ROCm 7.0 (AMD removed the ROCm EP from
+# 7.1+ in favor of MIGraphX). The base image is ROCm 7.2.x, which is
+# ABI-compatible with the wheel's library requirements (same sonames) and
+# natively supports gfx1151 (Radeon 8060S / Ryzen AI Max "Strix Halo").
+#
+# Requires the host to have the amdgpu kernel driver and GPU access to
+# /dev/kfd and /dev/dri (e.g. `podman run --device /dev/kfd --device
+# /dev/dri ...` or `docker run --device /dev/kfd --device /dev/dri ...`).
+# linux/amd64 only.
+
+ARG ROCM_VERSION=7.2.4
+ARG GO_VERSION=1.25.5
+ARG ORT_ROCM_WHEEL_URL=https://repo.radeon.com/rocm/manylinux/rocm-rel-7.0/onnxruntime_rocm-1.22.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
+
+# Build stage. The Go binding dlopens the ONNX Runtime shared library at
+# runtime, so the build needs no GPU/ROCm toolchain -- a plain Go image
+# suffices.
+FROM golang:${GO_VERSION} AS builder
+
+WORKDIR /app
+
+# Copy go mod files first for better caching
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+RUN CGO_ENABLED=1 go build -ldflags="-s -w" -o parakeet .
+
+# Runtime stage
+FROM rocm/dev-ubuntu-24.04:${ROCM_VERSION}
+
+# Model precision: "fp32" (default, GPU-appropriate, ~2.5GB) or "int8" (~670MB).
+# int8 runs on the ROCm EP but most quantized ops dequantize to fp32 on GPU,
+# so fp32 is the recommended precision here (same guidance as the CUDA image).
+ARG MODEL_PRECISION=fp32
+ARG ORT_ROCM_WHEEL_URL
+
+# ffmpeg is used for non-WAV audio conversion. The ROCm build of ONNX Runtime
+# is installed via pip, its shared libraries are extracted to a fixed path,
+# and the Python package itself is removed to keep the image lean.
+#
+# The ROCm EP's provider library links against MIOpen, hipFFT, RCCL and
+# rocSolver, which the slim dev base image does not ship; install them here.
+# The provider was built against ROCm 7.0's rocm_smi soname (.so.7) while
+# 7.2.x ships .so.1 -- the EP only calls a handful of SMI query functions,
+# so a compat symlink resolves it.
+RUN apt-get update && apt-get install -y --no-cache --no-install-recommends \
+    ca-certificates \
+    curl \
+    ffmpeg \
+    miopen-hip \
+    hipfft \
+    rccl \
+    rocsolver \
+    python3-pip \
+    && mkdir -p /opt/compat \
+    && ln -sf /opt/rocm/lib/librocm_smi64.so.1 /opt/compat/librocm_smi64.so.7 \
+    && python3 -m pip install --no-cache-dir --break-system-packages "${ORT_ROCM_WHEEL_URL}" \
+    && python3 - <<'EOF'
+import os, shutil
+import onnxruntime
+pkg = os.path.dirname(onnxruntime.__file__)
+site = os.path.dirname(pkg)
+os.makedirs("/opt/onnxruntime/lib", exist_ok=True)
+# The ORT core + ROCm provider live in the capi dir; auditwheel'd
+# dependencies (hipBLAS shim) live in a sibling *.libs dir.
+shutil.copytree(os.path.join(pkg, "capi"), "/opt/onnxruntime/lib", dirs_exist_ok=True)
+for name in os.listdir(site):
+    if name.startswith("onnxruntime") and name.endswith(".libs"):
+        shutil.copytree(os.path.join(site, name), "/opt/onnxruntime/lib", dirs_exist_ok=True)
+EOF
+
+# Drop the Python package now that the shared libraries are extracted; the
+# Go binary only needs the .so files.
+RUN python3 -m pip uninstall -y --break-system-packages onnxruntime-rocm || true \
+    && rm -rf /var/lib/apt/lists/*
+
+# The ROCm provider resolves its HIP/MIOpen/rocBLAS dependencies from the
+# base image's /opt/rocm/lib; the extracted ORT libraries must come first.
+# /opt/compat holds the rocm_smi soname symlink.
+ENV LD_LIBRARY_PATH=/opt/onnxruntime/lib:/opt/compat:/opt/rocm/lib
+ENV ONNXRUNTIME_LIB=/opt/onnxruntime/lib/libonnxruntime.so.1.22.1
+
+# The ROCm EP wheel ships precompiled Tensile kernels for gfx900-gfx1201
+# but not for newer APUs like gfx1151 (Radeon 8060S / "Strix Halo"),
+# whose ISA is compatible with gfx1100. Report gfx1100 so the runtime
+# selects those kernels. Users on GPUs that have their own kernels (or on
+# a future wheel with native support) can override or unset this, e.g.
+# `docker run -e HSA_OVERRIDE_GFX_VERSION= ...`.
+ENV HSA_OVERRIDE_GFX_VERSION=11.0.0
+
+WORKDIR /app
+
+# Download and embed models based on MODEL_PRECISION arg, BEFORE copying the
+# binary, so a code change only invalidates the small COPY layer below and the
+# multi-GB model layer stays cached across rebuilds.
+# Silero VAD: pinned tag + sha256 (snakers4/silero-vad, MIT). At v6.2.1 the
+# ONNX file lives at src/silero_vad/data/.
+ARG SILERO_VAD_VERSION=v6.2.1
+ARG SILERO_VAD_SHA256=1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3
+RUN mkdir -p /models && \
+    curl -L -o /models/config.json "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/config.json" && \
+    curl -L -o /models/vocab.txt "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/vocab.txt" && \
+    curl -L -o /models/nemo128.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/nemo128.onnx" && \
+    curl -L -o /models/silero_vad.onnx "https://github.com/snakers4/silero-vad/raw/${SILERO_VAD_VERSION}/src/silero_vad/data/silero_vad.onnx" && \
+    echo "${SILERO_VAD_SHA256}  /models/silero_vad.onnx" | sha256sum -c - && \
+    if [ "$MODEL_PRECISION" = "int8" ]; then \
+        curl -L -o /models/encoder-model.int8.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/encoder-model.int8.onnx" && \
+        curl -L -o /models/decoder_joint-model.int8.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/decoder_joint-model.int8.onnx"; \
+    else \
+        curl -L -o /models/encoder-model.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/encoder-model.onnx" && \
+        curl -L -o /models/encoder-model.onnx.data "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/encoder-model.onnx.data" && \
+        curl -L -o /models/decoder_joint-model.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/decoder_joint-model.onnx"; \
+    fi && \
+    apt-get purge -y curl && \
+    apt-get autoremove -y && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy binary from builder (last, so rebuilds after code changes stay fast)
+COPY --from=builder /app/parakeet /app/parakeet
+
+# Expose port
+EXPOSE 5092
+
+# Runtime defaults as env vars, not CMD args: Docker replaces the whole CMD when
+# the user passes their own flags, so a default baked into CMD is lost on any
+# override. Every flag reads its PARAKEET_* env var, and a flag passed on the
+# command line still wins over the env var.
+ENV PARAKEET_PORT=5092
+ENV PARAKEET_MODELS=/models
+ENV PARAKEET_GPU=rocm
+
+ENTRYPOINT ["/app/parakeet"]

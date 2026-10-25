@@ -158,6 +158,7 @@ type Provider string
 const (
 	ProviderCPU  Provider = "cpu"
 	ProviderCUDA Provider = "cuda"
+	ProviderROCm Provider = "rocm"
 )
 
 // ParseProvider normalizes a user-supplied provider string. An empty value
@@ -169,8 +170,10 @@ func ParseProvider(s string) (Provider, error) {
 		return ProviderCPU, nil
 	case ProviderCUDA:
 		return ProviderCUDA, nil
+	case ProviderROCm:
+		return ProviderROCm, nil
 	default:
-		return "", fmt.Errorf("unsupported GPU provider %q (supported: cpu, cuda)", s)
+		return "", fmt.Errorf("unsupported GPU provider %q (supported: cpu, cuda, rocm)", s)
 	}
 }
 
@@ -228,6 +231,29 @@ type BoundaryConfig struct {
 	VADModelPath string
 }
 
+// resolveORTLibPath returns the ONNX Runtime shared library to load: the
+// ONNXRUNTIME_LIB env var when set, otherwise the first common install path
+// that exists on this system. It returns "" when nothing was found.
+func resolveORTLibPath() string {
+	if p := os.Getenv("ONNXRUNTIME_LIB"); p != "" {
+		return p
+	}
+	commonPaths := []string{
+		"/usr/lib/libonnxruntime.so",
+		"/usr/lib/x86_64-linux-gnu/libonnxruntime.so",
+		"/usr/local/lib/libonnxruntime.so",
+		"/opt/onnxruntime/lib/libonnxruntime.so",
+		"./libonnxruntime.so",
+		"libonnxruntime.so.1.25.1",
+	}
+	for _, p := range commonPaths {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return ""
+}
+
 // buildSessionOptions returns the ONNX Runtime session options for the
 // configured execution provider. It returns (nil, nil) for the CPU provider so
 // sessions are created with default CPU behavior, identical to the pre-GPU code
@@ -271,9 +297,22 @@ func buildSessionOptions(gpu GPUConfig) (*ort.SessionOptions, error) {
 			opts.Destroy()
 			return nil, fmt.Errorf("enable CUDA execution provider (device %d): %w", gpu.DeviceID, err)
 		}
+	case ProviderROCm:
+		// The Go binding ships no ROCm wrapper and ORT's generic name-based
+		// AppendExecutionProvider rejects "ROCM" (its supported list covers
+		// DML/QNN/OpenVINO/... only), so the provider is enabled through a
+		// small cgo shim that calls the dedicated
+		// OrtSessionOptionsAppendExecutionProvider_ROCM entry point exported
+		// by ROCm-enabled ONNX Runtime builds (see rocm_ep.c). The legacy
+		// entry point takes only the device id; ORT's default arena and
+		// MIOpen settings apply.
+		if err := appendROCmExecutionProvider(opts, gpu.DeviceID); err != nil {
+			opts.Destroy()
+			return nil, fmt.Errorf("enable ROCm execution provider (device %d): %w", gpu.DeviceID, err)
+		}
 	default:
 		opts.Destroy()
-		return nil, fmt.Errorf("unsupported GPU provider %q (supported: cpu, cuda)", gpu.Provider)
+		return nil, fmt.Errorf("unsupported GPU provider %q (supported: cpu, cuda, rocm)", gpu.Provider)
 	}
 
 	return opts, nil
@@ -339,23 +378,7 @@ func NewTranscriber(modelsDir string, workers int, opts Options) (*Transcriber, 
 	}
 
 	// Initialize ONNX Runtime
-	libPath := os.Getenv("ONNXRUNTIME_LIB")
-	if libPath == "" {
-		commonPaths := []string{
-			"/usr/lib/libonnxruntime.so",
-			"/usr/lib/x86_64-linux-gnu/libonnxruntime.so",
-			"/usr/local/lib/libonnxruntime.so",
-			"/opt/onnxruntime/lib/libonnxruntime.so",
-			"./libonnxruntime.so",
-			"libonnxruntime.so.1.25.1",
-		}
-		for _, p := range commonPaths {
-			if _, err := os.Stat(p); err == nil {
-				libPath = p
-				break
-			}
-		}
-	}
+	libPath := resolveORTLibPath()
 	if libPath == "" {
 		return nil, fmt.Errorf("ONNX Runtime library not found. Set ONNXRUNTIME_LIB env var or install libonnxruntime")
 	}
