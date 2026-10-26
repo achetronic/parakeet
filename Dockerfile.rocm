@@ -54,7 +54,7 @@ ARG ORT_ROCM_WHEEL_URL
 # The provider was built against ROCm 7.0's rocm_smi soname (.so.7) while
 # 7.2.x ships .so.1 -- the EP only calls a handful of SMI query functions,
 # so a compat symlink resolves it.
-RUN apt-get update && apt-get install -y --no-cache --no-install-recommends \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     ffmpeg \
