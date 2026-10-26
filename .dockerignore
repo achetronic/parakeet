@@ -5,6 +5,13 @@ parakeet-*
 
 # Models (mounted at runtime)
 models/
+models_int8/
+
+# Vendored ONNX Runtime libraries for native builds (images install their own)
+third_party/
+
+# Local build output
+bin/
 
 # Test files
 test/
