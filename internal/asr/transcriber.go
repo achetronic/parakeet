@@ -192,6 +192,7 @@ type Transcriber struct {
 	disableVADChunking bool
 	disableMelChunking bool
 	mel                *MelFilterbank
+	encoderLock        chan struct{}
 	encoder            *ort.DynamicAdvancedSession
 	vad                *sileroVAD
 	decoderPool        chan *decoderWorker
@@ -288,6 +289,7 @@ func NewTranscriber(modelsDir string, workers int, opts Options) (*Transcriber, 
 		maxTokensPerStep: 10,
 		blankIdx:         8192,
 		ffmpeg:           newFFmpegConverter(opts.FFmpeg),
+		encoderLock:      make(chan struct{}, 1),
 	}
 
 	// Load config
@@ -434,7 +436,11 @@ func NewTranscriber(modelsDir string, workers int, opts Options) (*Transcriber, 
 		if vadPath == "" {
 			vadPath = filepath.Join(modelsDir, "silero_vad.onnx")
 		}
-		vad, err := newSileroVAD(vadPath, sessOpts)
+		// Silero VAD runs on CPU with default options (nil sessOpts). The
+		// model is tiny (~1.8 MB) and operates on 32ms micro-windows (512 samples).
+		// Running it on CPU avoids GPU kernel launch overhead and prevents
+		// concurrent session conflicts with the GPU execution provider.
+		vad, err := newSileroVAD(vadPath, nil)
 		switch {
 		case err == nil:
 			t.vad = vad
@@ -688,6 +694,19 @@ func (t *Transcriber) loadAudio(data []byte, format string) ([]float32, error) {
 }
 
 func (t *Transcriber) runInference(ctx context.Context, features [][]float32, emitStart, emitEnd, frameOffset int64, holdFirst int, resolveSeam func(head []decodedToken) []decodedToken, emit func(delta string)) ([]decodedToken, error) {
+	// Acquire a pre-initialized worker first so concurrency is bounded by the
+	// worker pool before allocating GPU tensors or waiting for the encoder.
+	var w *decoderWorker
+	select {
+	case w = <-t.decoderPool:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer func() {
+		defer func() { _ = recover() }()
+		t.decoderPool <- w
+	}()
+
 	batchSize := int64(1)
 	numFeatures := int64(t.config.FeaturesSize)
 	numFrames := int64(len(features))
@@ -726,13 +745,26 @@ func (t *Transcriber) runInference(ctx context.Context, features [][]float32, em
 	}
 	defer outLenTensor.Destroy()
 
-	// Reuse the shared encoder session. Shapes vary per request, so tensors are
-	// supplied to Run each time; the session itself is built once at startup.
-	if err := t.encoder.Run(
-		[]ort.Value{inputTensor, lengthTensor},
-		[]ort.Value{outputTensor, outLenTensor},
-	); err != nil {
-		return nil, fmt.Errorf("encoder run failed: %w", err)
+	// Serialize access to the shared encoder session. While ORT sessions are
+	// theoretically thread-safe, GPU execution providers (CUDA/cuDNN and
+	// ROCm/MIOpen) share convolution handles and algorithm caches across runs.
+	// Concurrent encoder passes with differing dynamic shapes cause convolution
+	// algorithm search to race and fail. Serializing the encoder pass eliminates
+	// this race while letting decoder workers run in parallel.
+	select {
+	case t.encoderLock <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	runErr := func() error {
+		defer func() { <-t.encoderLock }()
+		return t.encoder.Run(
+			[]ort.Value{inputTensor, lengthTensor},
+			[]ort.Value{outputTensor, outLenTensor},
+		)
+	}()
+	if runErr != nil {
+		return nil, fmt.Errorf("encoder run failed: %w", runErr)
 	}
 
 	encoderOut := outputTensor.GetData()
@@ -744,7 +776,7 @@ func (t *Transcriber) runInference(ctx context.Context, features [][]float32, em
 
 	// Decoder tensors (encoderOut) must remain alive during tdtDecode.
 	// The defers above fire after tdtDecode returns, so this is safe.
-	return t.tdtDecode(ctx, encoderOut, actualEncodedLen, emitStart, emitEnd, frameOffset, holdFirst, resolveSeam, emit)
+	return t.tdtDecode(ctx, w, encoderOut, actualEncodedLen, emitStart, emitEnd, frameOffset, holdFirst, resolveSeam, emit)
 }
 
 // tdtDecode greedily decodes the encoder output for one window. It decodes the
@@ -759,22 +791,7 @@ func (t *Transcriber) runInference(ctx context.Context, features [][]float32, em
 // emitted; the survivors are streamed in order, then the rest of the window
 // streams as it is decoded. This keeps streaming order correct while buffering
 // only a handful of tokens per seam.
-func (t *Transcriber) tdtDecode(ctx context.Context, encoderOut []float32, encodedLen, emitStart, emitEnd, frameOffset int64, holdFirst int, resolveSeam func(head []decodedToken) []decodedToken, emit func(delta string)) ([]decodedToken, error) {
-	// Acquire a pre-initialized worker. Honor cancellation so a client that
-	// disconnects while all workers are busy does not leak a goroutine.
-	var w *decoderWorker
-	select {
-	case w = <-t.decoderPool:
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-	// Return the worker to the pool when done. Guard against a panic from
-	// sending on a closed pool during shutdown so we never crash the process.
-	defer func() {
-		defer func() { _ = recover() }()
-		t.decoderPool <- w
-	}()
-
+func (t *Transcriber) tdtDecode(ctx context.Context, w *decoderWorker, encoderOut []float32, encodedLen, emitStart, emitEnd, frameOffset int64, holdFirst int, resolveSeam func(head []decodedToken) []decodedToken, emit func(delta string)) ([]decodedToken, error) {
 	if DebugMode {
 		slog.Debug("TDT decode started", "encoderOutLen", len(encoderOut), "encodedLen", encodedLen)
 	}

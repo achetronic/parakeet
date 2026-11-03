@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync"
 
 	ort "github.com/yalue/onnxruntime_go"
 )
@@ -61,6 +62,7 @@ func (s *vadState) reset() {
 // runs OUTSIDE the decoder worker pool, so its concurrency is bounded by the
 // number of in-flight HTTP requests rather than by -workers.
 type sileroVAD struct {
+	mu      sync.Mutex
 	session *ort.DynamicAdvancedSession
 	srData  []int64
 }
@@ -148,10 +150,13 @@ func (v *sileroVAD) infer(st *vadState, window []float32) (float32, error) {
 	}
 	defer stateOutTensor.Destroy()
 
-	if err := v.session.Run(
+	v.mu.Lock()
+	err = v.session.Run(
 		[]ort.Value{inputTensor, stateTensor, srTensor},
 		[]ort.Value{outputTensor, stateOutTensor},
-	); err != nil {
+	)
+	v.mu.Unlock()
+	if err != nil {
 		return 0, fmt.Errorf("VAD run failed: %w", err)
 	}
 
