@@ -245,8 +245,8 @@ parakeet/
 | `PARAKEET_GPU`        | Execution provider: `cpu` or `cuda`         | `cpu`                 |
 | `PARAKEET_GPU_DEVICE` | GPU device index for `cuda`                  | `0`                   |
 | `PARAKEET_LONG_AUDIO` | Split over-limit audio into overlapping chunks | `false`             |
-| `PARAKEET_CHUNK_SECONDS` | Sliding-window size in seconds            | `300`                 |
-| `PARAKEET_CHUNK_OVERLAP_SECONDS` | Overlap between chunks in seconds | `15`                  |
+| `PARAKEET_CHUNK_SECONDS` | Sliding-window size in seconds (keep ≤20 for multilingual accuracy) | `20`                 |
+| `PARAKEET_CHUNK_OVERLAP_SECONDS` | Overlap between chunks in seconds | `3`                  |
 | `PARAKEET_DISABLE_VAD_BASED_CHUNKING` | Drop the Silero VAD boundary layer | `false`          |
 | `PARAKEET_DISABLE_MEL_BASED_CHUNKING` | Drop the mel-energy boundary layer | `false`          |
 | `PARAKEET_VAD_MODEL_PATH` | Path to silero_vad.onnx                  | `<models>/silero_vad.onnx` |

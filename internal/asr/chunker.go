@@ -15,8 +15,19 @@ var ErrAudioTooLong = errors.New("audio too long for a single pass; enable long-
 const (
 	// DefaultChunkSeconds and DefaultChunkOverlapSeconds are the out-of-the-box
 	// window and overlap sizes when a caller leaves them unset.
-	DefaultChunkSeconds        = 300
-	DefaultChunkOverlapSeconds = 15
+	//
+	// 20s is not arbitrary: parakeet-tdt-0.6b-v3's multilingual training
+	// utterances are capped at 20s (~250 encoder frames), so its relative
+	// positional attention only ever saw non-English speech inside that
+	// horizon. Windows longer than ~20s push attention distances into
+	// regions that were trained almost exclusively on English, and multilingual
+	// audio drifts into English (or AST translation) mode. NVIDIA's own
+	// long-form guidance restricts this model to a 256-frame (~20.5s)
+	// attention context for the same reason. The 3s overlap gives each window
+	// acoustic context and lets the decoder LSTM warm up before its owned
+	// region begins.
+	DefaultChunkSeconds        = 20
+	DefaultChunkOverlapSeconds = 3
 
 	// modelMaxEncoderFrames is the longest encoder-frame sequence the exported
 	// ONNX model accepts: its positional-encoding table is [1, 9999, 1024],
