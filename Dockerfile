@@ -35,25 +35,15 @@ FROM debian:bookworm-slim
 # Model precision: "int8" (default, ~670MB) or "fp32" (~2.5GB)
 ARG MODEL_PRECISION=int8
 
-# Speaker diarization model (Nemotron-3-Diarization). Opt-in via build arg so
-# the default image stays lean; the feature is also gated at runtime by
-# -enable-diarization. "true" bundles the model into /models/diarization/
-# (int8 ~120MB, fp32 ~400MB).
-ARG INCLUDE_DIARIZATION=false
-
-# Silero VAD model for chunk-boundary selection (long-audio mode). Pinned tag +
-# sha256 so the image build is reproducible and verified. snakers4/silero-vad is
-# MIT licensed. At v6.2.1 the ONNX file lives at src/silero_vad/data/.
-ARG SILERO_VAD_VERSION=v6.2.1
-ARG SILERO_VAD_SHA256=1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3
-
-# Install ONNX Runtime and ffmpeg (used for non-WAV audio conversion)
+# Install ONNX Runtime, make (model download via the Makefile) and ffmpeg
+# (used for non-WAV audio conversion)
 ARG ONNXRUNTIME_VERSION=1.25.1
 ARG TARGETARCH
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     ffmpeg \
+    make \
     && ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "aarch64" || echo "x64") \
     && curl -L -o /tmp/onnxruntime.tgz \
     "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-${ARCH}-${ONNXRUNTIME_VERSION}.tgz" \
@@ -68,42 +58,19 @@ ENV ONNXRUNTIME_LIB=/opt/onnxruntime/lib/libonnxruntime.so
 
 WORKDIR /app
 
-# Copy binary from builder
-COPY --from=builder /app/parakeet /app/parakeet
-
-# Download and embed models based on MODEL_PRECISION arg
-# int8: encoder-model.int8.onnx, decoder_joint-model.int8.onnx (~670MB total)
-# fp32: encoder-model.onnx, encoder-model.onnx.data, decoder_joint-model.onnx (~2.5GB total)
-RUN mkdir -p /models && \
-    curl -L -o /models/config.json "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/config.json" && \
-    curl -L -o /models/vocab.txt "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/vocab.txt" && \
-    curl -L -o /models/nemo128.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/nemo128.onnx" && \
-    curl -L -o /models/silero_vad.onnx "https://github.com/snakers4/silero-vad/raw/${SILERO_VAD_VERSION}/src/silero_vad/data/silero_vad.onnx" && \
-    echo "${SILERO_VAD_SHA256}  /models/silero_vad.onnx" | sha256sum -c - && \
-    if [ "$MODEL_PRECISION" = "fp32" ]; then \
-        curl -L -o /models/encoder-model.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/encoder-model.onnx" && \
-        curl -L -o /models/encoder-model.onnx.data "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/encoder-model.onnx.data" && \
-        curl -L -o /models/decoder_joint-model.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/decoder_joint-model.onnx"; \
-    else \
-        curl -L -o /models/encoder-model.int8.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/encoder-model.int8.onnx" && \
-        curl -L -o /models/decoder_joint-model.int8.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/decoder_joint-model.int8.onnx"; \
-    fi && \
-    if [ "$INCLUDE_DIARIZATION" = "true" ]; then \
-        mkdir -p /models/diarization && \
-        curl -L -o /models/diarization/config.json "https://huggingface.co/onnx-community/Nemotron-3-Diarization-ONNX/resolve/main/config.json" && \
-        curl -L -o /models/diarization/preprocessor_config.json "https://huggingface.co/onnx-community/Nemotron-3-Diarization-ONNX/resolve/main/preprocessor_config.json" && \
-        curl -L -o /models/diarization/processor_config.json "https://huggingface.co/onnx-community/Nemotron-3-Diarization-ONNX/resolve/main/processor_config.json" && \
-        if [ "$MODEL_PRECISION" = "fp32" ]; then \
-            curl -L -o /models/diarization/model.onnx "https://huggingface.co/onnx-community/Nemotron-3-Diarization-ONNX/resolve/main/onnx/model.onnx" && \
-            curl -L -o /models/diarization/model.onnx_data "https://huggingface.co/onnx-community/Nemotron-3-Diarization-ONNX/resolve/main/onnx/model.onnx_data"; \
-        else \
-            curl -L -o /models/diarization/model_quantized.onnx "https://huggingface.co/onnx-community/Nemotron-3-Diarization-ONNX/resolve/main/onnx/model_quantized.onnx" && \
-            curl -L -o /models/diarization/model_quantized.onnx_data "https://huggingface.co/onnx-community/Nemotron-3-Diarization-ONNX/resolve/main/onnx/model_quantized.onnx_data"; \
-        fi; \
-    fi && \
-    apt-get remove -y curl && \
+# Download and embed models via the Makefile recipes (single source of truth
+# for the model URLs). models-int8/-fp32 chain in Silero VAD and the
+# Nemotron-3-Diarization model (gated at runtime by -enable-diarization).
+# Downloaded before copying the binary so the multi-GB model layer stays
+# cached across code changes.
+COPY Makefile /app/Makefile
+RUN make MODELS_DIR=/models models-${MODEL_PRECISION} && \
+    apt-get purge -y curl make && \
     apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/*
+
+# Copy binary from builder
+COPY --from=builder /app/parakeet /app/parakeet
 
 # Expose port
 EXPOSE 5092
