@@ -44,22 +44,11 @@ RUN make MODELS_DIR=/models models-${MODEL_PRECISION}
 # Runtime stage
 FROM debian:bookworm-slim
 
-# Install ONNX Runtime and ffmpeg (used for non-WAV audio conversion). curl is
-# used only to fetch ONNX Runtime and is purged afterwards.
-ARG ONNXRUNTIME_VERSION=1.25.1
-ARG TARGETARCH
+# Install ffmpeg (used for non-WAV audio conversion). No curl here: the ONNX
+# Runtime library is copied from the builder stage.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
-    curl \
     ffmpeg \
-    && ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "aarch64" || echo "x64") \
-    && curl -L -o /tmp/onnxruntime.tgz \
-    "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-${ARCH}-${ONNXRUNTIME_VERSION}.tgz" \
-    && tar -xzf /tmp/onnxruntime.tgz -C /opt \
-    && mv /opt/onnxruntime-linux-${ARCH}-${ONNXRUNTIME_VERSION} /opt/onnxruntime \
-    && rm /tmp/onnxruntime.tgz \
-    && apt-get purge -y curl \
-    && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Set library path
@@ -68,7 +57,9 @@ ENV ONNXRUNTIME_LIB=/opt/onnxruntime/lib/libonnxruntime.so
 
 WORKDIR /app
 
-# Copy the models (downloaded in the models stage) and the binary.
+# Copy the ONNX Runtime library (from the builder), the models (from the
+# models stage) and the binary.
+COPY --from=builder /opt/onnxruntime/lib /opt/onnxruntime/lib
 COPY --from=models /models /models
 COPY --from=builder /app/parakeet /app/parakeet
 
