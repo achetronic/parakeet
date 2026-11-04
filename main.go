@@ -38,6 +38,7 @@ func main() {
 	flag.BoolVar(&cfg.DisableVADBasedChunking, "disable-vad-based-chunking", false, "Disable the Silero VAD layer of the chunk-boundary cascade (falls back to mel energy)")
 	flag.BoolVar(&cfg.DisableMelBasedChunking, "disable-mel-based-chunking", false, "Disable the mel-energy layer of the chunk-boundary cascade (falls back to the midpoint)")
 	flag.StringVar(&cfg.VADModelPath, "vad-model-path", "", "Path to the Silero VAD ONNX model (default: silero_vad.onnx inside the models dir)")
+	flag.BoolVar(&cfg.EnableDiarization, "enable-diarization", false, "Enable speaker diarization (requires the diarization model; opt-in per request with diarize=true)")
 	flag.Parse()
 
 	// Any flag not set on the command line falls back to its matching env var,

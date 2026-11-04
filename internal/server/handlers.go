@@ -322,6 +322,11 @@ func (s *Server) streamTranscription(w http.ResponseWriter, r *http.Request, aud
 // handleDiarizedTranscription transcribes with word timestamps, diarizes the
 // same audio, and returns speaker-attributed turns.
 func (s *Server) handleDiarizedTranscription(w http.ResponseWriter, r *http.Request, audioData []byte, language string) {
+	if s.diarizer == nil {
+		sendError(w, "Diarization is not enabled. Start the server with -enable-diarization", "invalid_request_error", http.StatusBadRequest)
+		return
+	}
+
 	samples, err := audio.Load(audioData, s.converter)
 	if err != nil {
 		if errors.Is(err, audio.ErrUnsupportedAudio) {

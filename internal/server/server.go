@@ -63,6 +63,11 @@ type Config struct {
 	DisableVADBasedChunking bool
 	DisableMelBasedChunking bool
 	VADModelPath            string
+
+	// EnableDiarization loads the Nemotron-3-Diarization model at startup and
+	// enables the diarize=true transcription parameter. Off by default so
+	// Parakeet-only deployments work without the extra model.
+	EnableDiarization bool
 }
 
 // Server represents the HTTP server for the ASR service
@@ -115,11 +120,17 @@ func New(cfg Config) (*Server, error) {
 		return nil, fmt.Errorf("failed to initialize transcriber: %w", err)
 	}
 
-	// Initialize diarizer (speaker diarization, opt-in per request via diarize=true).
-	diarizer, err := diarization.New(filepath.Join(cfg.ModelsDir, "diarization"))
-	if err != nil {
-		transcriber.Close()
-		return nil, fmt.Errorf("failed to initialize diarizer: %w", err)
+	// Initialize the diarizer only when speaker diarization is enabled (opt-in
+	// via -enable-diarization). It is off by default so Parakeet-only
+	// deployments do not need the extra model.
+	var diarizer *diarization.Diarizer
+	if cfg.EnableDiarization {
+		d, err := diarization.New(filepath.Join(cfg.ModelsDir, "diarization"))
+		if err != nil {
+			transcriber.Close()
+			return nil, fmt.Errorf("failed to initialize diarizer: %w", err)
+		}
+		diarizer = d
 	}
 
 	s := &Server{

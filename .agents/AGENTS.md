@@ -113,7 +113,7 @@ parakeet/
 
 ### `main.go` (Entry Point)
 
-- Parses CLI flags: `-port`, `-models`, `-log-level`, `-log-format`, `-workers`, `-ffmpeg`, `-ffmpeg-path`, `-ffmpeg-timeout`, `-gpu`, `-gpu-device`, `-chunk-seconds`, `-chunk-overlap-seconds`, `-long-audio`, `-disable-vad-based-chunking`, `-disable-mel-based-chunking`, `-vad-model-path`
+- Parses CLI flags: `-port`, `-models`, `-log-level`, `-log-format`, `-workers`, `-ffmpeg`, `-ffmpeg-path`, `-ffmpeg-timeout`, `-gpu`, `-gpu-device`, `-chunk-seconds`, `-chunk-overlap-seconds`, `-long-audio`, `-disable-vad-based-chunking`, `-disable-mel-based-chunking`, `-vad-model-path`, `-enable-diarization`
 - Configures `slog` global logger (text or JSON handler, four log levels)
 - Runs server in background goroutine, listens for SIGINT/SIGTERM
 - Graceful shutdown: waits up to 30s for in-flight requests via `http.Server.Shutdown`
@@ -217,7 +217,7 @@ parakeet/
 - `language` - ISO-639-1 code (default: "en")
 - `response_format` - json, text, srt, vtt, verbose_json (default: "json")
 - `prompt`, `temperature` - Accepted but ignored
-- `diarize` - When `true`, returns speaker-attributed turns (`verbose_json`-style with a `speaker` field per segment); requires the diarization model
+- `diarize` - When `true`, returns speaker-attributed turns (`verbose_json`-style with a `speaker` field per segment); requires the server to be started with `-enable-diarization`
 
 ## Code Patterns & Conventions
 
@@ -260,6 +260,7 @@ parakeet/
 | `PARAKEET_DISABLE_VAD_BASED_CHUNKING` | Drop the Silero VAD boundary layer | `false`          |
 | `PARAKEET_DISABLE_MEL_BASED_CHUNKING` | Drop the mel-energy boundary layer | `false`          |
 | `PARAKEET_VAD_MODEL_PATH` | Path to silero_vad.onnx                  | `<models>/silero_vad.onnx` |
+| `PARAKEET_ENABLE_DIARIZATION` | Load the diarization model and allow `diarize=true` | `false`              |
 
 ## Dependencies
 
