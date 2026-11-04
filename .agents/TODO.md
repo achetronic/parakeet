@@ -4,7 +4,7 @@ Pending tasks and improvements for the project.
 
 ## Audio Format Support
 
-- [x] **ffmpeg-based audio conversion** — Implemented in `internal/asr/ffmpeg.go`. WAV is parsed in-process (magic-byte detection); any other format is transcoded via an external `ffmpeg` binary. Configurable with `-ffmpeg`, `-ffmpeg-path`, `-ffmpeg-timeout`. See DD-012 for rationale.
+- [x] **ffmpeg-based audio conversion** — Implemented in `internal/audio/ffmpeg.go`. WAV is parsed in-process (magic-byte detection); any other format is transcoded via an external `ffmpeg` binary. Configurable with `-ffmpeg`, `-ffmpeg-path`, `-ffmpeg-timeout`. See DD-012 for rationale.
 
 ## API Completeness
 
@@ -17,11 +17,11 @@ Pending tasks and improvements for the project.
 - [x] **VAD-aware chunk boundaries + seam dedup**: Fixes chunk-seam hallucinations (issue #18) in long-audio mode. Overlap ownership is split on silence via a VAD -> mel-energy -> midpoint cascade, and a seam-level token dedup removes duplicated/colliding tokens. Toggle layers with `-disable-vad-based-chunking` / `-disable-mel-based-chunking`; VAD model path via `-vad-model-path`. See DD-014.
 - [x] **GPU inference** — Implemented via ONNX Runtime execution providers. Opt in with `-gpu cuda` / `-gpu-device N`; a dedicated `*-cuda` Docker image ships the GPU build. CPU remains the default. See DD-013. TensorRT and other accelerators remain out of scope (extend `buildSessionOptions`).
 - [ ] **Batch inference support** — Current implementation processes one audio file at a time. Batching multiple requests could improve throughput under load.
-- [ ] **Higher quality resampling** — `audio.go:resample()` uses linear interpolation. Sinc-based or polyphase resampling would improve audio quality.
+- [ ] **Higher quality resampling** — `internal/audio/audio.go:resample()` uses linear interpolation. Sinc-based or polyphase resampling would improve audio quality.
 
 ## Speaker Diarization
 
-- [ ] **Speaker diarization support** — Distinguish speakers ("who spoke when") and merge with Parakeet's word-level timestamps to return speaker-attributed transcripts. Add a Nemotron-3-Diarization ONNX model (downloaded via `make models-diarization-int8` / `models-diarization-fp32`) in a new `internal/diarization/` package kept separate from `internal/asr/` (own feature extraction, own ONNX session), the diarization+ASR merge step, and a new DD-0xx decision.
+- [x] **Speaker diarization support** — Done. Nemotron-3-Diarization ONNX (int8 default, fp32 available) in `internal/diarization/` (own feature extraction, AOSC/FIFO speaker cache, ONNX session), word-level timestamps in `internal/asr/words.go`, and the merge in `internal/server/merge.go`. Enabled per request with `diarize=true`. See DD-015 and DD-016.
 
 ## Testing
 
