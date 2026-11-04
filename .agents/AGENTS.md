@@ -147,8 +147,15 @@ parakeet/
 - `TranscriptionResponse` - Simple JSON response with text
 - `VerboseTranscriptionResponse` - Detailed response with segments, timing
 - `Segment` - Transcription segment with timing info
+- `SpeakerTurn` - Speaker-attributed turn (`speaker`, `start`, `end`, `text`)
+- `DiarizedTranscriptionResponse` - Returned when `diarize=true`; `segments` = speaker turns
 - `ErrorResponse`, `ErrorDetail` - OpenAI-compatible error format
 - `ModelInfo`, `ModelsResponse` - Model listing types
+
+#### `merge.go`
+
+- `merge(words, activity, frameDuration)` - Attributes each word to the speaker with the highest summed activity over its span, grouping consecutive words into `SpeakerTurn`s.
+- `dominantSpeaker()` - Picks the speaker with the highest activity over a word's (padded) time span.
 
 ### `internal/asr/` (ASR Package)
 
@@ -166,10 +173,15 @@ parakeet/
 - `Transcriber` - Main inference struct holding a long-lived encoder `*ort.DynamicAdvancedSession`, a pool of `decoderWorker`s, and an optional `*audio.Converter`
 - `NewTranscriber(modelsDir, workers, opts)` - Loads config, vocab, initializes ONNX Runtime, builds execution-provider session options, creates the shared encoder session and decoder pool
 - `Transcribe()` - Main entry: audio -> mel -> encoder -> TDT decode -> text
-- `TranscribeWords()` / `TranscribeWordsSamples()` - Word-level timestamps (see `words.go`)
 - `runInference()` - Runs the shared long-lived encoder session (variable-shape tensors supplied per `Run()`), then acquires a pool worker for decode
 - `tdtDecode()` - TDT greedy decoding loop reusing pooled session and tensors
 - `tokensToText()` - Token IDs to text with cleanup
+
+#### `words.go`
+
+- `Word{Text, Start, End}` - Word with timestamps in seconds.
+- `TranscribeWords()` / `TranscribeWordsSamples()` - Word-level timestamps (the latter from already-loaded samples).
+- `wordsFromTokens()` - Groups decoded tokens into words using the SentencePiece word-boundary marker (leading space).
 
 #### `chunker.go`, `boundary.go`, `vad.go`, `seam.go` (Long-Audio Chunking)
 
@@ -197,6 +209,8 @@ parakeet/
 #### `internal/diarization`
 
 - `Diarizer` / `New()` / `Diarize()` - Nemotron-3-Diarization speaker diarization over samples.
+- `Activity()` - Per-frame speaker probabilities (sigmoid of the logits) at the mel frame rate; the merge uses this.
+- `FrameDuration()` - Duration of one activity frame in seconds.
 - `speakerCache` - AOSC/FIFO speaker cache (ported from Transformers).
 - `featureExtractor` - Pre-emphasis 0.97 + shared mel front-end.
 - `Segment{Start, End, Speaker}` - Speaker-tagged time span.

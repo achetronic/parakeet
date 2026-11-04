@@ -290,14 +290,15 @@ Loud or dynamic music has no quiet frame, so the mel-energy layer degrades to ro
 
 ## DD-016: Diarization + ASR Merged by Word-Level Timestamps
 
-**Context**: Diarization yields speaker segments; Parakeet yields word timestamps. They must be combined.
+**Context**: Diarization yields per-frame speaker activity; Parakeet yields word timestamps. They must be combined.
 
-**Decision**: Transcribe the full audio with Parakeet (word timestamps), diarize the same audio, then tag each word with the speaker active at its start time; emit speaker-attributed turns (SegLST-style).
+**Decision**: Transcribe the full audio with Parakeet (word timestamps), diarize the same audio into per-frame speaker activity, then attribute each word to the speaker with the highest summed activity over its span; emit speaker-attributed turns (SegLST-style).
 
-**Rationale**: Full-audio ASR keeps context (better than segment-wise ASR); the timestamp intersection is simple and deterministic.
+**Rationale**: Full-audio ASR keeps context (better than segment-wise ASR). Attributing by per-frame activity (rather than thresholded segments) is the most precise: it never drops a word at segment edges and resolves overlap by the actual probabilities.
 
 **Consequences**:
 
 - The merge lives at the orchestration layer (server), not inside either package.
-- Overlap: a word goes to the speaker with the highest activity at that instant.
-- The transcription response gains a per-turn `speaker` field.
+- `Diarizer.Activity()` exposes the per-frame sigmoid probabilities; the merge consumes them directly.
+- Overlap: resolved by the highest summed activity over the word's span (padded to absorb ASR/diarization boundary jitter).
+- The transcription response gains a per-turn `speaker` field (opt-in via `diarize=true` + `-enable-diarization`).
