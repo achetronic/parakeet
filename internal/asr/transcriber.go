@@ -523,7 +523,11 @@ func (t *Transcriber) Close() {
 }
 
 func (t *Transcriber) Transcribe(ctx context.Context, audioData []byte, format, language string) (string, error) {
-	return t.transcribe(ctx, audioData, format, language, nil)
+	tokens, err := t.transcribe(ctx, audioData, format, language, nil)
+	if err != nil {
+		return "", err
+	}
+	return t.tokensToText(tokens), nil
 }
 
 // TranscribeStream behaves like Transcribe but invokes emit with each new
@@ -535,22 +539,26 @@ func (t *Transcriber) Transcribe(ctx context.Context, audioData []byte, format, 
 // concatenation by surrounding/duplicate spaces only.
 // emit is always called from the same goroutine that called TranscribeStream.
 func (t *Transcriber) TranscribeStream(ctx context.Context, audioData []byte, format, language string, emit func(delta string)) (string, error) {
-	return t.transcribe(ctx, audioData, format, language, emit)
+	tokens, err := t.transcribe(ctx, audioData, format, language, emit)
+	if err != nil {
+		return "", err
+	}
+	return t.tokensToText(tokens), nil
 }
 
 // transcribe is the shared implementation. When emit is non-nil, decoded text
 // is streamed delta by delta as tokens are produced.
-func (t *Transcriber) transcribe(ctx context.Context, audioData []byte, format, language string, emit func(delta string)) (string, error) {
+func (t *Transcriber) transcribe(ctx context.Context, audioData []byte, format, language string, emit func(delta string)) ([]decodedToken, error) {
 	// Let's check context immediately
 	select {
 	case <-ctx.Done():
-		return "", ctx.Err()
+		return nil, ctx.Err()
 	default:
 	}
 
 	waveform, err := t.loadAudio(audioData, format)
 	if err != nil {
-		return "", fmt.Errorf("failed to load audio: %w", err)
+		return nil, fmt.Errorf("failed to load audio: %w", err)
 	}
 
 	if DebugMode {
@@ -561,12 +569,12 @@ func (t *Transcriber) transcribe(ctx context.Context, audioData []byte, format, 
 		if DebugMode {
 			slog.Debug("audio too short, skipping", "samples", len(waveform))
 		}
-		return "", nil
+		return nil, nil
 	}
 
 	features := t.mel.Extract(waveform)
 	if len(features) == 0 {
-		return "", fmt.Errorf("no features extracted")
+		return nil, fmt.Errorf("no features extracted")
 	}
 
 	if DebugMode {
@@ -583,7 +591,7 @@ func (t *Transcriber) transcribe(ctx context.Context, audioData []byte, format, 
 		slog.Warn("audio exceeds the single-pass model limit; enable --long-audio to transcribe long files in overlapping chunks",
 			"seconds", float64(len(features))/float64(t.mel.FramesPerSecond()),
 			"limitSeconds", float64(modelMaxEncoderFrames*subsampling)/float64(t.mel.FramesPerSecond()))
-		return "", err
+		return nil, err
 	}
 
 	if DebugMode {
@@ -618,7 +626,7 @@ func (t *Transcriber) transcribe(ctx context.Context, audioData []byte, format, 
 
 		windowTokens, err := t.runInference(ctx, features[win.start:win.end], emitStart, emitEnd, frameOffset, holdFirst, resolveSeam, emit)
 		if err != nil {
-			return "", fmt.Errorf("inference failed: %w", err)
+			return nil, fmt.Errorf("inference failed: %w", err)
 		}
 		tokens = append(tokens, windowTokens...)
 		prevTail = windowTokens
@@ -628,7 +636,7 @@ func (t *Transcriber) transcribe(ctx context.Context, audioData []byte, format, 
 		slog.Debug("tokens decoded", "count", len(tokens))
 	}
 
-	return t.tokensToText(tokens), nil
+	return tokens, nil
 }
 
 // newBoundaryOracle builds the per-request chunk-boundary cascade over this
@@ -866,7 +874,7 @@ func (t *Transcriber) tdtDecode(ctx context.Context, encoderOut []float32, encod
 			// Collect and stream only tokens this window owns; the rest belong
 			// to an adjacent window's overlap and would duplicate speech.
 			if timestep >= emitStart && timestep < emitEnd {
-				dt := decodedToken{id: token, timestep: frameOffset + timestep}
+				dt := decodedToken{id: token, timestep: frameOffset + timestep, duration: int64(step)}
 				if resolved {
 					result = append(result, dt)
 					emitText(dt.id)

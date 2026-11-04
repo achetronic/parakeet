@@ -272,3 +272,32 @@ Loud or dynamic music has no quiet frame, so the mel-energy layer degrades to ro
 - New files: `internal/asr/boundary.go` (oracle stack), `internal/asr/vad.go` (Silero session), `internal/asr/seam.go` (dedup). `chunker.go` gains `planChunksWithBoundaries`/`planForAudioWithBoundaries`; `transcriber.go` threads absolute timesteps, the seam buffer, and the per-request oracle chain.
 - `silero_vad.onnx` is a new required-for-VAD model file; its absence is a graceful degrade, not a failure.
 - Reference reproduction material (the issue #18 MP3 plus `.srt`/`.vtt`/`.txt`) lives in `testdata/reference/`, with a build-tag-gated Go seam inspector (`-tags=seaminspect`) that prints transcribed vs reference text around every seam. No Python, no network.
+
+## DD-015: Nemotron-3-Diarization as the Diarization Model
+
+**Context**: The server needs "who spoke when" to complement the existing Parakeet ASR.
+
+**Decision**: Use `nvidia/Nemotron-3-Diarization` (Sortformer successor, 100M, 8 speakers, `openmdw-1.1`) via the community ONNX export `onnx-community/Nemotron-3-Diarization-ONNX`, under `models/diarization/`, in two precisions: **int8 by default** (`model_quantized.onnx`, MatMulNBits), paired with the int8 Parakeet, and **fp32** (`model.onnx`) for when the fp32 Parakeet is used.
+
+**Rationale**: Language-agnostic, commercial-friendly license, ONNX fits the existing runtime. Each diarization precision follows its Parakeet counterpart (int8 with int8, fp32 with fp32 — DD-006 and DD-013).
+
+**Consequences**:
+
+- Streaming encoder with cache (`cached_embeds`/`chunk_embeds`) → chunked inference.
+- The speaker-cache logic (AOSC/FIFO) lives in `config.json`, not in the graph → implemented in Go.
+- New `internal/diarization/` package with its own feature extraction (preemphasis 0.97); no shared code with `asr`.
+- int8-only risk: `MatMulNBits` + contrib ops on ORT 1.23; the fp32 variant uses plain `MatMul`.
+
+## DD-016: Diarization + ASR Merged by Word-Level Timestamps
+
+**Context**: Diarization yields speaker segments; Parakeet yields word timestamps. They must be combined.
+
+**Decision**: Transcribe the full audio with Parakeet (word timestamps), diarize the same audio, then tag each word with the speaker active at its start time; emit speaker-attributed turns (SegLST-style).
+
+**Rationale**: Full-audio ASR keeps context (better than segment-wise ASR); the timestamp intersection is simple and deterministic.
+
+**Consequences**:
+
+- The merge lives at the orchestration layer (server), not inside either package.
+- Overlap: a word goes to the speaker with the highest activity at that instant.
+- The transcription response gains a per-turn `speaker` field.

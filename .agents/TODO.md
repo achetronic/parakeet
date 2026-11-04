@@ -19,6 +19,10 @@ Pending tasks and improvements for the project.
 - [ ] **Batch inference support** — Current implementation processes one audio file at a time. Batching multiple requests could improve throughput under load.
 - [ ] **Higher quality resampling** — `audio.go:resample()` uses linear interpolation. Sinc-based or polyphase resampling would improve audio quality.
 
+## Speaker Diarization
+
+- [ ] **Speaker diarization support** — Distinguish speakers ("who spoke when") and merge with Parakeet's word-level timestamps to return speaker-attributed transcripts. Add a Nemotron-3-Diarization ONNX model (downloaded via `make models-diarization-int8` / `models-diarization-fp32`) in a new `internal/diarization/` package kept separate from `internal/asr/` (own feature extraction, own ONNX session), the diarization+ASR merge step, and a new DD-0xx decision.
+
 ## Testing
 
 - [ ] **Expand test coverage** — Add integration tests for the full transcription pipeline and edge cases (very short audio, max length audio, various WAV formats).

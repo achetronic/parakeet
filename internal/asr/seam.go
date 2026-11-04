@@ -32,6 +32,7 @@ const (
 type decodedToken struct {
 	id       int
 	timestep int64
+	duration int64 // TDT duration class (step), in encoder frames; 0 = same-frame continuation
 }
 
 // dedupSeam decides which of window i+1's leading tokens (head) survive when
