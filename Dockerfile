@@ -29,27 +29,37 @@ COPY . .
 # Build binary with CGO
 RUN go build -ldflags="-s -w" -o parakeet .
 
+# Models stage: downloads the models via the Makefile recipes so the runtime
+# stage only receives the model files (no make, curl or Makefile in the final
+# image).
+FROM debian:bookworm-slim AS models
+ARG MODEL_PRECISION=int8
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl make \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY Makefile /app/Makefile
+RUN make MODELS_DIR=/models models-${MODEL_PRECISION}
+
 # Runtime stage
 FROM debian:bookworm-slim
 
-# Model precision: "int8" (default, ~670MB) or "fp32" (~2.5GB)
-ARG MODEL_PRECISION=int8
-
-# Install ONNX Runtime, make (model download via the Makefile) and ffmpeg
-# (used for non-WAV audio conversion)
+# Install ONNX Runtime and ffmpeg (used for non-WAV audio conversion). curl is
+# used only to fetch ONNX Runtime and is purged afterwards.
 ARG ONNXRUNTIME_VERSION=1.25.1
 ARG TARGETARCH
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     ffmpeg \
-    make \
     && ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "aarch64" || echo "x64") \
     && curl -L -o /tmp/onnxruntime.tgz \
     "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-${ARCH}-${ONNXRUNTIME_VERSION}.tgz" \
     && tar -xzf /tmp/onnxruntime.tgz -C /opt \
     && mv /opt/onnxruntime-linux-${ARCH}-${ONNXRUNTIME_VERSION} /opt/onnxruntime \
     && rm /tmp/onnxruntime.tgz \
+    && apt-get purge -y curl \
+    && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Set library path
@@ -58,18 +68,8 @@ ENV ONNXRUNTIME_LIB=/opt/onnxruntime/lib/libonnxruntime.so
 
 WORKDIR /app
 
-# Download and embed models via the Makefile recipes (single source of truth
-# for the model URLs). models-int8/-fp32 chain in Silero VAD and the
-# Nemotron-3-Diarization model (gated at runtime by -enable-diarization).
-# Downloaded before copying the binary so the multi-GB model layer stays
-# cached across code changes.
-COPY Makefile /app/Makefile
-RUN make MODELS_DIR=/models models-${MODEL_PRECISION} && \
-    apt-get purge -y curl make && \
-    apt-get autoremove -y && \
-    rm -rf /var/lib/apt/lists/*
-
-# Copy binary from builder
+# Copy the models (downloaded in the models stage) and the binary.
+COPY --from=models /models /models
 COPY --from=builder /app/parakeet /app/parakeet
 
 # Expose port
