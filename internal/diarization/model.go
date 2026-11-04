@@ -20,27 +20,6 @@ const (
 	silenceEmbedsName = "silence_embeds"
 )
 
-// resolveLibPath returns the ONNX Runtime shared library path, honoring
-// ONNXRUNTIME_LIB first. Mirrors the lookup order used by the asr transcriber.
-func resolveLibPath() (string, error) {
-	if p := os.Getenv("ONNXRUNTIME_LIB"); p != "" {
-		return p, nil
-	}
-	for _, p := range []string{
-		"/usr/lib/libonnxruntime.so",
-		"/usr/lib/x86_64-linux-gnu/libonnxruntime.so",
-		"/usr/local/lib/libonnxruntime.so",
-		"/opt/onnxruntime/lib/libonnxruntime.so",
-		"./libonnxruntime.so",
-		"libonnxruntime.so.1.25.1",
-	} {
-		if _, err := os.Stat(p); err == nil {
-			return p, nil
-		}
-	}
-	return "", fmt.Errorf("ONNX Runtime library not found. Set ONNXRUNTIME_LIB env var or install libonnxruntime")
-}
-
 // resolveModelPath returns the int8 model when present, else the fp32 one.
 func resolveModelPath(dir string) (string, error) {
 	for _, name := range []string{"model_quantized.onnx", "model.onnx"} {

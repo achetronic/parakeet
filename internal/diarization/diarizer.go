@@ -9,6 +9,8 @@ import (
 	"sort"
 
 	ort "github.com/yalue/onnxruntime_go"
+
+	"parakeet/internal/ortutil"
 )
 
 // Segment is a speaker-tagged time span in seconds. Speaker indices follow
@@ -34,18 +36,9 @@ func New(modelsDir string) (*Diarizer, error) {
 		return nil, err
 	}
 
-	libPath, err := resolveLibPath()
+	envInit, err := ortutil.Init()
 	if err != nil {
 		return nil, err
-	}
-	ort.SetSharedLibraryPath(libPath)
-
-	envInit := false
-	if !ort.IsInitialized() {
-		if err := ort.InitializeEnvironment(); err != nil {
-			return nil, fmt.Errorf("initialize ONNX Runtime: %w", err)
-		}
-		envInit = true
 	}
 
 	modelPath, err := resolveModelPath(modelsDir)

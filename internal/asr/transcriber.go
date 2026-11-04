@@ -16,6 +16,8 @@ import (
 	"strings"
 
 	ort "github.com/yalue/onnxruntime_go"
+
+	"parakeet/internal/ortutil"
 )
 
 // DebugMode enables verbose logging
@@ -196,6 +198,7 @@ type Transcriber struct {
 	vad                *sileroVAD
 	decoderPool        chan *decoderWorker
 	ffmpeg             *ffmpegConverter
+	envInit            bool
 }
 
 // Options groups optional knobs passed to NewTranscriber. Zero values keep
@@ -338,32 +341,13 @@ func NewTranscriber(modelsDir string, workers int, opts Options) (*Transcriber, 
 		}
 	}
 
-	// Initialize ONNX Runtime
-	libPath := os.Getenv("ONNXRUNTIME_LIB")
-	if libPath == "" {
-		commonPaths := []string{
-			"/usr/lib/libonnxruntime.so",
-			"/usr/lib/x86_64-linux-gnu/libonnxruntime.so",
-			"/usr/local/lib/libonnxruntime.so",
-			"/opt/onnxruntime/lib/libonnxruntime.so",
-			"./libonnxruntime.so",
-			"libonnxruntime.so.1.25.1",
-		}
-		for _, p := range commonPaths {
-			if _, err := os.Stat(p); err == nil {
-				libPath = p
-				break
-			}
-		}
+	// Initialize ONNX Runtime. The first caller in the process initializes the
+	// environment and owns its teardown; later callers share it.
+	envInit, err := ortutil.Init()
+	if err != nil {
+		return nil, err
 	}
-	if libPath == "" {
-		return nil, fmt.Errorf("ONNX Runtime library not found. Set ONNXRUNTIME_LIB env var or install libonnxruntime")
-	}
-
-	ort.SetSharedLibraryPath(libPath)
-	if err := ort.InitializeEnvironment(); err != nil {
-		return nil, fmt.Errorf("failed to initialize ONNX Runtime: %w", err)
-	}
+	t.envInit = envInit
 
 	// Resolve encoder path
 	encoderPath := filepath.Join(modelsDir, "encoder-model.int8.onnx")
@@ -519,7 +503,9 @@ func (t *Transcriber) Close() {
 			w.destroy()
 		}
 	}
-	ort.DestroyEnvironment()
+	if t.envInit {
+		ort.DestroyEnvironment()
+	}
 }
 
 func (t *Transcriber) Transcribe(ctx context.Context, audioData []byte, format, language string) (string, error) {
