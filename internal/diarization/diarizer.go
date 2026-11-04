@@ -74,6 +74,42 @@ func (d *Diarizer) Close() {
 
 // Diarize returns "who spoke when" as speaker-tagged segments.
 func (d *Diarizer) Diarize(ctx context.Context, samples []float32) ([]Segment, error) {
+	logits, err := d.run(ctx, samples)
+	if err != nil {
+		return nil, err
+	}
+	return extractSegments(logits, d.cfg.NumSpeakers, d.frameDuration()), nil
+}
+
+// Activity returns the per-frame speaker probability (sigmoid of the logits)
+// at the mel frame rate. The merge uses it to attribute each word to the
+// speaker with the highest activity over its span.
+func (d *Diarizer) Activity(ctx context.Context, samples []float32) ([][]float32, error) {
+	logits, err := d.run(ctx, samples)
+	if err != nil {
+		return nil, err
+	}
+	act := make([][]float32, len(logits))
+	for f := range logits {
+		row := make([]float32, d.cfg.NumSpeakers)
+		for s := range row {
+			row[s] = sigmoid(logits[f][s])
+		}
+		act[f] = row
+	}
+	return act, nil
+}
+
+// FrameDuration returns the duration of one activity frame in seconds.
+func (d *Diarizer) FrameDuration() float64 { return d.frameDuration() }
+
+func (d *Diarizer) frameDuration() float64 {
+	return float64(d.cfg.HopLength) / float64(d.cfg.SampleRate)
+}
+
+// run extracts features and runs the chunked encoder, returning the per-frame
+// speaker logits (mel rate) for the whole audio.
+func (d *Diarizer) run(ctx context.Context, samples []float32) ([][]float32, error) {
 	mel := d.fe.extract(samples)
 	if len(mel) == 0 {
 		return nil, fmt.Errorf("no features extracted")
@@ -127,8 +163,7 @@ func (d *Diarizer) Diarize(ctx context.Context, samples []float32) ([]Segment, e
 		allLogits = allLogits[:numMelFrames]
 	}
 
-	frameDur := float64(d.cfg.HopLength) / float64(d.cfg.SampleRate)
-	return extractSegments(allLogits, d.cfg.NumSpeakers, frameDur), nil
+	return allLogits, nil
 }
 
 // runChunk feeds one chunk (mel + cached embeds) to the encoder and returns its

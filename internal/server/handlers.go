@@ -338,13 +338,13 @@ func (s *Server) handleDiarizedTranscription(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	segs, err := s.diarizer.Diarize(r.Context(), samples)
+	activity, err := s.diarizer.Activity(r.Context(), samples)
 	if err != nil {
 		sendError(w, "Diarization failed: "+err.Error(), "server_error", http.StatusInternalServerError)
 		return
 	}
 
-	turns := merge(words, segs)
+	turns := merge(words, activity, s.diarizer.FrameDuration())
 	parts := make([]string, 0, len(turns))
 	for _, t := range turns {
 		parts = append(parts, t.Text)

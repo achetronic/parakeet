@@ -8,57 +8,68 @@ import (
 	"testing"
 
 	"parakeet/internal/asr"
-	"parakeet/internal/diarization"
 )
 
-func TestMerge(t *testing.T) {
+// activity2 builds a [numFrames][2] activity at 0.1s/frame where speaker 0 is
+// active in [s0, e0) frames and speaker 1 in [s1, e1) frames.
+func activity2(numFrames, s0, e0, s1, e1 int) [][]float32 {
+	act := make([][]float32, numFrames)
+	for f := range act {
+		row := make([]float32, 2)
+		if f >= s0 && f < e0 {
+			row[0] = 1
+		}
+		if f >= s1 && f < e1 {
+			row[1] = 1
+		}
+		act[f] = row
+	}
+	return act
+}
+
+func TestMergeByActivity(t *testing.T) {
 	words := []asr.Word{
 		{Text: "hello", Start: 0.1, End: 0.4},
 		{Text: "world", Start: 0.5, End: 0.8},
-		{Text: "how", Start: 1.0, End: 1.2},
-		{Text: "are", Start: 1.3, End: 1.5},
-		{Text: "you", Start: 1.6, End: 1.8},
+		{Text: "hi", Start: 1.1, End: 1.4},
 	}
-	segs := []diarization.Segment{
-		{Start: 0.0, End: 0.9, Speaker: 0},
-		{Start: 0.95, End: 2.0, Speaker: 1},
-	}
+	act := activity2(20, 0, 10, 10, 20) // spk 0 in 0-1s, spk 1 in 1-2s
+	got := merge(words, act, 0.1)
 	want := []SpeakerTurn{
 		{Speaker: 0, Start: 0.1, End: 0.8, Text: "hello world"},
-		{Speaker: 1, Start: 1.0, End: 1.8, Text: "how are you"},
+		{Speaker: 1, Start: 1.1, End: 1.4, Text: "hi"},
 	}
-	got := merge(words, segs)
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("merge = %+v, want %+v", got, want)
 	}
 }
 
-func TestMergeOverlapPrefersMostRecentSegment(t *testing.T) {
+func TestMergeOverlapHighestActivity(t *testing.T) {
 	words := []asr.Word{{Text: "hi", Start: 0.5, End: 0.6}}
-	segs := []diarization.Segment{
-		{Start: 0.0, End: 0.7, Speaker: 0},
-		{Start: 0.4, End: 1.0, Speaker: 1},
+	act := make([][]float32, 10)
+	for f := range act {
+		act[f] = []float32{0.5, 0.8} // speaker 1 consistently louder
 	}
-	got := merge(words, segs)
+	got := merge(words, act, 0.1)
 	if len(got) != 1 || got[0].Speaker != 1 {
 		t.Fatalf("merge = %+v, want speaker 1", got)
 	}
 }
 
-func TestMergeSkipsWordsOutsideSegments(t *testing.T) {
-	words := []asr.Word{{Text: "hi", Start: 5.0, End: 5.2}}
-	segs := []diarization.Segment{{Start: 0.0, End: 1.0, Speaker: 0}}
-	if got := merge(words, segs); len(got) != 0 {
-		t.Fatalf("expected no turns, got %+v", got)
+func TestMergeBoundaryJitter(t *testing.T) {
+	// The word starts at 0.48s but the speaker is only active from 0.5s; the
+	// pad absorbs the jitter instead of dropping the word.
+	words := []asr.Word{{Text: "In", Start: 0.48, End: 0.72}}
+	act := activity2(10, 5, 10, 0, 0)
+	got := merge(words, act, 0.1)
+	if len(got) != 1 || got[0].Speaker != 0 {
+		t.Fatalf("merge = %+v, want speaker 0", got)
 	}
 }
 
-func TestMergeToleratesWordStartingBeforeSegment(t *testing.T) {
-	// A word that starts just before the segment's edge (within mergeTolerance)
-	// is still attributed to that speaker.
-	words := []asr.Word{{Text: "In", Start: 0.48, End: 0.72}}
-	segs := []diarization.Segment{{Start: 0.68, End: 7.49, Speaker: 0}}
-	got := merge(words, segs)
+func TestMergeEmptyActivity(t *testing.T) {
+	words := []asr.Word{{Text: "hi", Start: 0.1, End: 0.2}}
+	got := merge(words, nil, 0.1)
 	if len(got) != 1 || got[0].Speaker != 0 {
 		t.Fatalf("merge = %+v, want one speaker-0 turn", got)
 	}

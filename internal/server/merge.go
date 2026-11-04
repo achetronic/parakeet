@@ -3,22 +3,17 @@
 
 package server
 
-import (
-	"parakeet/internal/asr"
-	"parakeet/internal/diarization"
-)
+import "parakeet/internal/asr"
 
-// merge assigns each word to the speaker active at its start time and groups
-// consecutive words of the same speaker into turns. In overlapping speech the
-// most recently started segment wins; segments carry no per-frame score, so
-// this approximates "highest activity".
-func merge(words []asr.Word, segs []diarization.Segment) []SpeakerTurn {
+// merge attributes each word to the speaker with the highest summed activity
+// over the word's time span, then groups consecutive words of the same speaker
+// into turns. It uses the raw per-frame activity rather than the thresholded
+// segments, so words at segment edges are not lost and overlap is resolved by
+// the actual probabilities (DD-016 "highest activity").
+func merge(words []asr.Word, activity [][]float32, frameDuration float64) []SpeakerTurn {
 	var turns []SpeakerTurn
 	for _, w := range words {
-		spk, ok := speakerAt(segs, w.Start)
-		if !ok {
-			continue
-		}
+		spk := dominantSpeaker(activity, w.Start, w.End, frameDuration)
 		if n := len(turns); n > 0 && turns[n-1].Speaker == spk {
 			turns[n-1].Text += " " + w.Text
 			if w.End > turns[n-1].End {
@@ -31,24 +26,48 @@ func merge(words []asr.Word, segs []diarization.Segment) []SpeakerTurn {
 	return turns
 }
 
-// mergeTolerance absorbs the boundary jitter between ASR word timestamps and
-// diarization segment edges (the two models segment the same audio slightly
-// differently).
-const mergeTolerance = 0.25 // seconds
+// dominantSpeaker returns the index of the speaker with the highest summed
+// activity over [start-pad, end+pad]. The pad absorbs the boundary jitter
+// between ASR word timestamps and diarization frames.
+func dominantSpeaker(activity [][]float32, start, end, frameDuration float64) int {
+	const pad = 0.1 // seconds
 
-// speakerAt returns the speaker of the segment containing t, preferring the
-// segment that started most recently when several overlap. A word starting
-// slightly before a segment's edge (within mergeTolerance) still counts.
-func speakerAt(segs []diarization.Segment, t float64) (int, bool) {
-	spk := 0
-	found := false
-	bestStart := -1.0
-	for _, s := range segs {
-		if s.Start-mergeTolerance <= t && t < s.End && (!found || s.Start > bestStart) {
-			spk = s.Speaker
-			found = true
-			bestStart = s.Start
+	if len(activity) == 0 || len(activity[0]) == 0 {
+		return 0
+	}
+	numSpeakers := len(activity[0])
+
+	fs := int((start - pad) / frameDuration)
+	fe := int((end + pad) / frameDuration)
+	if fs < 0 {
+		fs = 0
+	}
+	if fe > len(activity) {
+		fe = len(activity)
+	}
+	if fs >= fe {
+		f := int(start / frameDuration)
+		if f < 0 {
+			f = 0
+		}
+		if f >= len(activity) {
+			f = len(activity) - 1
+		}
+		fs, fe = f, f+1
+	}
+
+	sums := make([]float32, numSpeakers)
+	for f := fs; f < fe; f++ {
+		for s := 0; s < numSpeakers; s++ {
+			sums[s] += activity[f][s]
 		}
 	}
-	return spk, found
+
+	spk := 0
+	for s := 1; s < numSpeakers; s++ {
+		if sums[s] > sums[spk] {
+			spk = s
+		}
+	}
+	return spk
 }
