@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"parakeet/internal/asr"
+	"parakeet/internal/audio"
 )
 
 // handleStreamingTranscription accepts a request whose body is the raw audio
@@ -83,7 +84,7 @@ func (s *Server) handleStreamingTranscription(w http.ResponseWriter, r *http.Req
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return // Context cancelled, ignore
 		}
-		if errors.Is(err, asr.ErrUnsupportedAudio) {
+		if errors.Is(err, audio.ErrUnsupportedAudio) {
 			sendError(w, "Unsupported or malformed audio: "+err.Error(), "invalid_request_error", http.StatusBadRequest)
 			return
 		}

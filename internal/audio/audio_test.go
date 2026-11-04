@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Alby Hernández <hola@achetronic.com>
 // SPDX-License-Identifier: Apache-2.0
 
-package asr
+package audio
 
 import (
 	"bytes"
@@ -13,9 +13,7 @@ import (
 	"time"
 )
 
-// buildMinimalWAV produces a tiny but valid 16-bit PCM WAV blob suitable
-// for exercising the magic-byte detection and parsing path without any
-// external dependency.
+// buildMinimalWAV produces a tiny but valid 16-bit PCM WAV blob.
 func buildMinimalWAV(t *testing.T, sampleRate uint32, samples int) []byte {
 	t.Helper()
 	var buf bytes.Buffer
@@ -70,11 +68,9 @@ func TestIsWAV(t *testing.T) {
 	}
 }
 
-func TestLoadAudioAcceptsWAV(t *testing.T) {
-	tr := &Transcriber{}
+func TestLoadAcceptsWAV(t *testing.T) {
 	wav := buildMinimalWAV(t, 16000, 100)
-
-	samples, err := tr.loadAudio(wav, "")
+	samples, err := Load(wav, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -83,12 +79,8 @@ func TestLoadAudioAcceptsWAV(t *testing.T) {
 	}
 }
 
-func TestLoadAudioRejectsNonWAVWhenFFmpegDisabled(t *testing.T) {
-	tr := &Transcriber{ffmpeg: nil}
-
-	// Clearly non-WAV payload. Without ffmpeg this must surface
-	// ErrUnsupportedAudio so the HTTP handler can map it to 400.
-	_, err := tr.loadAudio([]byte("OggS\x00\x02\x00\x00\x00\x00\x00\x00this is not wav"), ".ogg")
+func TestLoadRejectsNonWAVWhenFFmpegDisabled(t *testing.T) {
+	_, err := Load([]byte("OggS\x00\x02\x00\x00\x00\x00\x00\x00this is not wav"), nil)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -97,28 +89,19 @@ func TestLoadAudioRejectsNonWAVWhenFFmpegDisabled(t *testing.T) {
 	}
 }
 
-// TestLoadAudioConcurrentWAV ensures that the WAV fast path is safe to call
-// from many goroutines at once. This matches what the worker pool does in
-// practice (up to `-workers` concurrent inferences, each preceded by
-// loadAudio). It is the regression test for the PR #5 tempfile collision
-// bug: we run it many times in parallel and expect no data races or
-// spurious failures.
-func TestLoadAudioConcurrentWAV(t *testing.T) {
-	tr := &Transcriber{}
+func TestLoadConcurrentWAV(t *testing.T) {
 	wav := buildMinimalWAV(t, 16000, 1000)
-
 	const goroutines = 32
 	const iterations = 16
 
 	var wg sync.WaitGroup
 	errs := make(chan error, goroutines*iterations)
-
 	for g := 0; g < goroutines; g++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for i := 0; i < iterations; i++ {
-				samples, err := tr.loadAudio(wav, "")
+				samples, err := Load(wav, nil)
 				if err != nil {
 					errs <- err
 					return
@@ -130,37 +113,23 @@ func TestLoadAudioConcurrentWAV(t *testing.T) {
 			}
 		}()
 	}
-
 	wg.Wait()
 	close(errs)
 	for err := range errs {
-		t.Fatalf("concurrent loadAudio failed: %v", err)
+		t.Fatalf("concurrent Load failed: %v", err)
 	}
 }
 
-// TestFFmpegConverterUnique verifies that two concurrent conversions never
-// share temporary files. We don't require ffmpeg to actually succeed — we
-// only care that os.CreateTemp hands us unique paths. The test is skipped
-// when ffmpeg is not available to keep CI green on runners without it.
-func TestFFmpegConverterConcurrentTempFiles(t *testing.T) {
+func TestConverterConcurrentTempFiles(t *testing.T) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		t.Skip("ffmpeg not available in PATH, skipping")
 	}
-
-	conv := newFFmpegConverter(FFmpegConfig{
-		Enabled: true,
-		Timeout: 10 * time.Second,
-	})
+	conv := NewConverter(FFmpegConfig{Enabled: true, Timeout: 10 * time.Second})
 	if conv == nil {
 		t.Skip("converter did not initialize, skipping")
 	}
 
-	// Feed garbage so ffmpeg errors out quickly, but through the real code
-	// path that creates temp files. The payload is intentionally invalid
-	// to keep the test fast. We only care that each invocation errors
-	// with ErrUnsupportedAudio and never panics or races.
 	payload := []byte("not a real audio file, just checking concurrency safety")
-
 	const goroutines = 16
 	var wg sync.WaitGroup
 	for i := 0; i < goroutines; i++ {
@@ -176,18 +145,14 @@ func TestFFmpegConverterConcurrentTempFiles(t *testing.T) {
 	wg.Wait()
 }
 
-func TestNewFFmpegConverterReturnsNilWhenDisabled(t *testing.T) {
-	if c := newFFmpegConverter(FFmpegConfig{Enabled: false}); c != nil {
+func TestNewConverterReturnsNilWhenDisabled(t *testing.T) {
+	if c := NewConverter(FFmpegConfig{Enabled: false}); c != nil {
 		t.Fatalf("expected nil converter when disabled, got %#v", c)
 	}
 }
 
-func TestNewFFmpegConverterReturnsNilWhenMissing(t *testing.T) {
-	// Use a name that is overwhelmingly unlikely to resolve in PATH.
-	c := newFFmpegConverter(FFmpegConfig{
-		Enabled:    true,
-		BinaryPath: "__definitely_not_a_real_binary_parakeet_test__",
-	})
+func TestNewConverterReturnsNilWhenMissing(t *testing.T) {
+	c := NewConverter(FFmpegConfig{Enabled: true, BinaryPath: "__definitely_not_a_real_binary_parakeet_test__"})
 	if c != nil {
 		t.Fatalf("expected nil converter when binary missing, got %#v", c)
 	}
@@ -205,7 +170,6 @@ func TestTrimStderr(t *testing.T) {
 	}
 	for _, tc := range cases {
 		got := trimStderr(tc.in)
-		// Accept "conversion failed" when the normalized result is empty.
 		if got == "" || (tc.want == "" && got != "conversion failed") {
 			if tc.want != "" || got != "conversion failed" {
 				t.Errorf("trimStderr(%q) = %q, want %q", tc.in, got, tc.want)

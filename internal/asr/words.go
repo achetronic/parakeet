@@ -29,6 +29,16 @@ func (t *Transcriber) TranscribeWords(ctx context.Context, audioData []byte, for
 	return t.wordsFromTokens(tokens), nil
 }
 
+// TranscribeWordsSamples transcribes already-loaded mono 16 kHz samples and
+// returns each word with its start and end times.
+func (t *Transcriber) TranscribeWordsSamples(ctx context.Context, samples []float32) ([]Word, error) {
+	tokens, err := t.transcribeSamples(ctx, samples, nil)
+	if err != nil {
+		return nil, err
+	}
+	return t.wordsFromTokens(tokens), nil
+}
+
 // wordsFromTokens groups decoded tokens into words with timestamps. A token
 // whose vocab text starts with a space opens a new word; every other token is
 // appended to the current word, extending its end time.

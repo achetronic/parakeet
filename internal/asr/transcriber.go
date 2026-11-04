@@ -17,6 +17,7 @@ import (
 
 	ort "github.com/yalue/onnxruntime_go"
 
+	"parakeet/internal/audio"
 	"parakeet/internal/mel"
 	"parakeet/internal/ortutil"
 )
@@ -198,7 +199,7 @@ type Transcriber struct {
 	encoder            *ort.DynamicAdvancedSession
 	vad                *sileroVAD
 	decoderPool        chan *decoderWorker
-	ffmpeg             *ffmpegConverter
+	ffmpeg             *audio.Converter
 	envInit            bool
 }
 
@@ -206,7 +207,7 @@ type Transcriber struct {
 // the previous behavior: WAV-only input, no ffmpeg conversion, CPU inference,
 // default chunk sizes, and the full boundary stack (VAD then mel then midpoint).
 type Options struct {
-	FFmpeg   FFmpegConfig
+	FFmpeg   *audio.Converter
 	GPU      GPUConfig
 	Chunk    ChunkConfig
 	Boundary BoundaryConfig
@@ -284,14 +285,13 @@ func buildSessionOptions(gpu GPUConfig) (*ort.SessionOptions, error) {
 }
 
 // NewTranscriber loads models and initializes the decoder worker pool.
-// When opts.FFmpeg.Enabled is true and the ffmpeg binary is resolvable,
-// non-WAV inputs will be transcoded on the fly. Otherwise, only WAV is
-// accepted and non-WAV inputs return ErrUnsupportedAudio.
+// When opts.FFmpeg is non-nil, non-WAV inputs are transcoded on the fly.
+// Otherwise only WAV is accepted and non-WAV inputs return audio.ErrUnsupportedAudio.
 func NewTranscriber(modelsDir string, workers int, opts Options) (*Transcriber, error) {
 	t := &Transcriber{
 		maxTokensPerStep: 10,
 		blankIdx:         8192,
-		ffmpeg:           newFFmpegConverter(opts.FFmpeg),
+		ffmpeg:           opts.FFmpeg,
 	}
 
 	// Load config
@@ -536,16 +536,20 @@ func (t *Transcriber) TranscribeStream(ctx context.Context, audioData []byte, fo
 // transcribe is the shared implementation. When emit is non-nil, decoded text
 // is streamed delta by delta as tokens are produced.
 func (t *Transcriber) transcribe(ctx context.Context, audioData []byte, format, language string, emit func(delta string)) ([]decodedToken, error) {
-	// Let's check context immediately
+	waveform, err := audio.Load(audioData, t.ffmpeg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load audio: %w", err)
+	}
+	return t.transcribeSamples(ctx, waveform, emit)
+}
+
+// transcribeSamples transcribes already-loaded mono 16 kHz samples; it is the
+// shared core behind the byte-based and samples-based entry points.
+func (t *Transcriber) transcribeSamples(ctx context.Context, waveform []float32, emit func(delta string)) ([]decodedToken, error) {
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	default:
-	}
-
-	waveform, err := t.loadAudio(audioData, format)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load audio: %w", err)
 	}
 
 	if DebugMode {
@@ -645,41 +649,6 @@ func (t *Transcriber) newBoundaryOracle(features [][]float32, waveform []float32
 	}
 	oracles = append(oracles, midpointBoundaryOracle{})
 	return chainBoundaryOracle{oracles: oracles}
-}
-
-// loadAudio decodes raw request bytes into mono 16 kHz float32 samples.
-//
-// Detection is done by content, not by filename extension: an OpenAI client
-// is free to upload a file without an extension or with a misleading one,
-// and the transcription endpoint only ever sees bytes. WAV inputs are
-// parsed in-process with zero external dependencies. Anything else is
-// delegated to the optional ffmpeg converter; when ffmpeg is unavailable
-// the call fails with ErrUnsupportedAudio so the HTTP layer can surface a
-// 400 response instead of a generic 500.
-//
-// The `format` parameter is kept for logging and future heuristics, but it
-// is intentionally not used to pick the decoder.
-func (t *Transcriber) loadAudio(data []byte, format string) ([]float32, error) {
-	if isWAV(data) {
-		return parseWAV(data)
-	}
-
-	if t.ffmpeg == nil {
-		return nil, fmt.Errorf("input is not WAV and ffmpeg conversion is disabled: %w", ErrUnsupportedAudio)
-	}
-
-	if DebugMode {
-		slog.Debug("converting audio via ffmpeg",
-			"format", format,
-			"bytes", len(data),
-		)
-	}
-
-	wavData, err := t.ffmpeg.Convert(data)
-	if err != nil {
-		return nil, err
-	}
-	return parseWAV(wavData)
 }
 
 func (t *Transcriber) runInference(ctx context.Context, features [][]float32, emitStart, emitEnd, frameOffset int64, holdFirst int, resolveSeam func(head []decodedToken) []decodedToken, emit func(delta string)) ([]decodedToken, error) {

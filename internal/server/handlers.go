@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"parakeet/internal/asr"
+	"parakeet/internal/audio"
 )
 
 // handleHealth returns the server health status
@@ -135,6 +136,13 @@ func (s *Server) handleMultipartTranscription(w http.ResponseWriter, r *http.Req
 	// Determine audio format from extension
 	ext := strings.ToLower(filepath.Ext(header.Filename))
 
+	// Diarization path: batch-only speaker attribution, takes precedence over
+	// streaming.
+	if parseBool(r.FormValue("diarize")) {
+		s.handleDiarizedTranscription(w, r, audioData, language)
+		return
+	}
+
 	// Streaming path: emit SSE transcript.text.delta events as the decoder
 	// produces text, then a final transcript.text.done. Only json/text
 	// formats are streamable; others fall through to the buffered path.
@@ -149,7 +157,7 @@ func (s *Server) handleMultipartTranscription(w http.ResponseWriter, r *http.Req
 		// Unsupported or malformed audio is a client error: the request
 		// body we received cannot be decoded. Everything else is treated
 		// as an internal failure.
-		if errors.Is(err, asr.ErrUnsupportedAudio) {
+		if errors.Is(err, audio.ErrUnsupportedAudio) {
 			sendError(w, "Unsupported or malformed audio: "+err.Error(), "invalid_request_error", http.StatusBadRequest)
 			return
 		}
@@ -300,7 +308,7 @@ func (s *Server) streamTranscription(w http.ResponseWriter, r *http.Request, aud
 		}
 		msg := "Transcription failed: " + err.Error()
 		errType := "server_error"
-		if errors.Is(err, asr.ErrUnsupportedAudio) {
+		if errors.Is(err, audio.ErrUnsupportedAudio) {
 			msg = "Unsupported or malformed audio: " + err.Error()
 			errType = "invalid_request_error"
 		}
@@ -311,10 +319,51 @@ func (s *Server) streamTranscription(w http.ResponseWriter, r *http.Request, aud
 	writeEvent("transcript.text.done", StreamDoneEvent{Type: "transcript.text.done", Text: text})
 }
 
+// handleDiarizedTranscription transcribes with word timestamps, diarizes the
+// same audio, and returns speaker-attributed turns.
+func (s *Server) handleDiarizedTranscription(w http.ResponseWriter, r *http.Request, audioData []byte, language string) {
+	samples, err := audio.Load(audioData, s.converter)
+	if err != nil {
+		if errors.Is(err, audio.ErrUnsupportedAudio) {
+			sendError(w, "Unsupported or malformed audio: "+err.Error(), "invalid_request_error", http.StatusBadRequest)
+			return
+		}
+		sendError(w, "Failed to load audio: "+err.Error(), "server_error", http.StatusInternalServerError)
+		return
+	}
+
+	words, err := s.transcriber.TranscribeWordsSamples(r.Context(), samples)
+	if err != nil {
+		s.writeTranscribeError(w, err)
+		return
+	}
+
+	segs, err := s.diarizer.Diarize(r.Context(), samples)
+	if err != nil {
+		sendError(w, "Diarization failed: "+err.Error(), "server_error", http.StatusInternalServerError)
+		return
+	}
+
+	turns := merge(words, segs)
+	parts := make([]string, 0, len(turns))
+	for _, t := range turns {
+		parts = append(parts, t.Text)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(DiarizedTranscriptionResponse{
+		Task:     "transcribe",
+		Language: language,
+		Duration: float64(len(samples)) / 16000.0,
+		Text:     strings.Join(parts, " "),
+		Segments: turns,
+	})
+}
+
 // writeTranscribeError maps a transcription error to an OpenAI-compatible HTTP
 // error response. Only safe to call before any body has been written.
 func (s *Server) writeTranscribeError(w http.ResponseWriter, err error) {
-	if errors.Is(err, asr.ErrUnsupportedAudio) {
+	if errors.Is(err, audio.ErrUnsupportedAudio) {
 		sendError(w, "Unsupported or malformed audio: "+err.Error(), "invalid_request_error", http.StatusBadRequest)
 		return
 	}
