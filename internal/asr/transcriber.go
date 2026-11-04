@@ -17,6 +17,7 @@ import (
 
 	ort "github.com/yalue/onnxruntime_go"
 
+	"parakeet/internal/mel"
 	"parakeet/internal/ortutil"
 )
 
@@ -193,7 +194,7 @@ type Transcriber struct {
 	longAudio          bool
 	disableVADChunking bool
 	disableMelChunking bool
-	mel                *MelFilterbank
+	mel                *mel.Filterbank
 	encoder            *ort.DynamicAdvancedSession
 	vad                *sileroVAD
 	decoderPool        chan *decoderWorker
@@ -317,7 +318,7 @@ func NewTranscriber(modelsDir string, workers int, opts Options) (*Transcriber, 
 	}
 
 	// Initialize mel filterbank
-	t.mel = NewMelFilterbank(t.config.FeaturesSize, 16000)
+	t.mel = mel.New(t.config.FeaturesSize, 16000, 512, 160, 400) // NeMo defaults: 512 FFT, 10 ms hop, 25 ms window
 
 	// Resolve chunk sizes (seconds to mel frames) and reject anything that
 	// would overrun the model's frame limit.

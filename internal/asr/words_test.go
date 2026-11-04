@@ -6,6 +6,8 @@ package asr
 import (
 	"math"
 	"testing"
+
+	"parakeet/internal/mel"
 )
 
 func TestWordsFromTokens(t *testing.T) {
@@ -79,7 +81,7 @@ func TestWordsFromTokens(t *testing.T) {
 			tr := &Transcriber{
 				vocab:  tt.vocab,
 				config: Config{SubsamplingFactor: 8},
-				mel:    NewMelFilterbank(128, 16000),
+				mel:    mel.New(128, 16000, 512, 160, 400),
 			}
 			got := tr.wordsFromTokens(tt.toks)
 			if len(got) != len(tt.want) {
