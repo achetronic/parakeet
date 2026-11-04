@@ -297,6 +297,7 @@ No other external Go dependencies. Standard library used for HTTP, JSON, audio p
 - Health check included
 - Exposed port: 5092
 - `Dockerfile.cuda`: NVIDIA CUDA base + GPU build of ONNX Runtime, fp32 models, linux/amd64 only. Run with `--gpus all` (nvidia-container-toolkit required).
+- Speaker diarization is opt-in in the image: pass `--build-arg INCLUDE_DIARIZATION=true` to bundle the Nemotron-3-Diarization model (matching `MODEL_PRECISION`), and enable it at runtime with `PARAKEET_ENABLE_DIARIZATION=true` (or `-enable-diarization`). Default images do not include it.
 
 ## Common Tasks for Agents
 

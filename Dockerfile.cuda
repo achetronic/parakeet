@@ -62,6 +62,12 @@ FROM ${CUDA_RUNTIME_IMAGE}
 
 # Model precision: "fp32" (default, GPU-appropriate, ~2.5GB) or "int8" (~670MB)
 ARG MODEL_PRECISION=fp32
+
+# Speaker diarization model (Nemotron-3-Diarization). Opt-in via build arg so
+# the default image stays lean; the feature is also gated at runtime by
+# -enable-diarization. "true" bundles the model into /models/diarization/
+# (int8 ~120MB, fp32 ~400MB).
+ARG INCLUDE_DIARIZATION=false
 ARG ONNXRUNTIME_VERSION
 
 # Silero VAD model for chunk-boundary selection (long-audio mode). Pinned tag +
@@ -107,6 +113,19 @@ RUN mkdir -p /models && \
         curl -L -o /models/encoder-model.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/encoder-model.onnx" && \
         curl -L -o /models/encoder-model.onnx.data "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/encoder-model.onnx.data" && \
         curl -L -o /models/decoder_joint-model.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/decoder_joint-model.onnx"; \
+    fi && \
+    if [ "$INCLUDE_DIARIZATION" = "true" ]; then \
+        mkdir -p /models/diarization && \
+        curl -L -o /models/diarization/config.json "https://huggingface.co/onnx-community/Nemotron-3-Diarization-ONNX/resolve/main/config.json" && \
+        curl -L -o /models/diarization/preprocessor_config.json "https://huggingface.co/onnx-community/Nemotron-3-Diarization-ONNX/resolve/main/preprocessor_config.json" && \
+        curl -L -o /models/diarization/processor_config.json "https://huggingface.co/onnx-community/Nemotron-3-Diarization-ONNX/resolve/main/processor_config.json" && \
+        if [ "$MODEL_PRECISION" = "int8" ]; then \
+            curl -L -o /models/diarization/model_quantized.onnx "https://huggingface.co/onnx-community/Nemotron-3-Diarization-ONNX/resolve/main/onnx/model_quantized.onnx" && \
+            curl -L -o /models/diarization/model_quantized.onnx_data "https://huggingface.co/onnx-community/Nemotron-3-Diarization-ONNX/resolve/main/onnx/model_quantized.onnx_data"; \
+        else \
+            curl -L -o /models/diarization/model.onnx "https://huggingface.co/onnx-community/Nemotron-3-Diarization-ONNX/resolve/main/onnx/model.onnx" && \
+            curl -L -o /models/diarization/model.onnx_data "https://huggingface.co/onnx-community/Nemotron-3-Diarization-ONNX/resolve/main/onnx/model.onnx_data"; \
+        fi; \
     fi && \
     apt-get purge -y curl && \
     apt-get autoremove -y && \

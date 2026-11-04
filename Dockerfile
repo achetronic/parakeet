@@ -35,6 +35,12 @@ FROM debian:bookworm-slim
 # Model precision: "int8" (default, ~670MB) or "fp32" (~2.5GB)
 ARG MODEL_PRECISION=int8
 
+# Speaker diarization model (Nemotron-3-Diarization). Opt-in via build arg so
+# the default image stays lean; the feature is also gated at runtime by
+# -enable-diarization. "true" bundles the model into /models/diarization/
+# (int8 ~120MB, fp32 ~400MB).
+ARG INCLUDE_DIARIZATION=false
+
 # Silero VAD model for chunk-boundary selection (long-audio mode). Pinned tag +
 # sha256 so the image build is reproducible and verified. snakers4/silero-vad is
 # MIT licensed. At v6.2.1 the ONNX file lives at src/silero_vad/data/.
@@ -81,6 +87,19 @@ RUN mkdir -p /models && \
     else \
         curl -L -o /models/encoder-model.int8.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/encoder-model.int8.onnx" && \
         curl -L -o /models/decoder_joint-model.int8.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/decoder_joint-model.int8.onnx"; \
+    fi && \
+    if [ "$INCLUDE_DIARIZATION" = "true" ]; then \
+        mkdir -p /models/diarization && \
+        curl -L -o /models/diarization/config.json "https://huggingface.co/onnx-community/Nemotron-3-Diarization-ONNX/resolve/main/config.json" && \
+        curl -L -o /models/diarization/preprocessor_config.json "https://huggingface.co/onnx-community/Nemotron-3-Diarization-ONNX/resolve/main/preprocessor_config.json" && \
+        curl -L -o /models/diarization/processor_config.json "https://huggingface.co/onnx-community/Nemotron-3-Diarization-ONNX/resolve/main/processor_config.json" && \
+        if [ "$MODEL_PRECISION" = "fp32" ]; then \
+            curl -L -o /models/diarization/model.onnx "https://huggingface.co/onnx-community/Nemotron-3-Diarization-ONNX/resolve/main/onnx/model.onnx" && \
+            curl -L -o /models/diarization/model.onnx_data "https://huggingface.co/onnx-community/Nemotron-3-Diarization-ONNX/resolve/main/onnx/model.onnx_data"; \
+        else \
+            curl -L -o /models/diarization/model_quantized.onnx "https://huggingface.co/onnx-community/Nemotron-3-Diarization-ONNX/resolve/main/onnx/model_quantized.onnx" && \
+            curl -L -o /models/diarization/model_quantized.onnx_data "https://huggingface.co/onnx-community/Nemotron-3-Diarization-ONNX/resolve/main/onnx/model_quantized.onnx_data"; \
+        fi; \
     fi && \
     apt-get remove -y curl && \
     apt-get autoremove -y && \
