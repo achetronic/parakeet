@@ -1,10 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Alby Hernández <hola@achetronic.com>
 // SPDX-License-Identifier: Apache-2.0
 
-// Package mel computes log-mel filterbank features: windowing, FFT, power
-// spectrum, mel filterbank, log, and per-feature mean/std normalization. It is
-// the front-end shared by the asr and diarization models; callers with extra
-// preprocessing (e.g. pre-emphasis) apply it before calling Extract.
+// Package mel computes log-mel filterbank features matching NeMo's
+// AudioToMelSpectrogramPreprocessor: a pre-emphasis filter, a symmetric Hann
+// window centred inside a zero-padded FFT frame, a Slaney mel filterbank with
+// area normalisation, a 2^-24 log guard and per-feature mean/std normalisation
+// with N-1 variance. It is the front-end shared by the asr and diarization
+// models.
 package mel
 
 import (
@@ -12,64 +14,106 @@ import (
 	"math/cmplx"
 )
 
+// NeMo preprocessor constants.
+const (
+	logZeroGuard = 1.0 / (1 << 24) // 2^-24, NeMo's log guard
+	stdEpsilon   = 1e-5            // added to the std before dividing
+)
+
 // Filterbank computes log-mel filterbank features.
 type Filterbank struct {
-	nMels      int
-	sampleRate int
-	nFFT       int
-	hopLength  int
-	winLength  int
-	filterbank [][]float64
-	hannWindow []float64
+	nMels       int
+	sampleRate  int
+	nFFT        int
+	hopLength   int
+	winLength   int
+	preEmphasis float64
+	filterbank  [][]float64 // [nMels][nFFT/2+1] continuous Slaney weights
+	window      []float64   // length nFFT: Hann(winLength) zero-padded to centre
 }
 
-// New creates a mel filterbank extractor for the given front-end parameters.
-func New(nMels, sampleRate, nFFT, hopLength, winLength int) *Filterbank {
+// New creates a mel filterbank extractor. preEmphasis is the pre-emphasis
+// coefficient (0.97 for NeMo/Nemotron; 0 disables it).
+func New(nMels, sampleRate, nFFT, hopLength, winLength int, preEmphasis float64) *Filterbank {
 	f := &Filterbank{
-		nMels:      nMels,
-		sampleRate: sampleRate,
-		nFFT:       nFFT,
-		hopLength:  hopLength,
-		winLength:  winLength,
+		nMels:       nMels,
+		sampleRate:  sampleRate,
+		nFFT:        nFFT,
+		hopLength:   hopLength,
+		winLength:   winLength,
+		preEmphasis: preEmphasis,
 	}
 	f.filterbank = f.createMelFilterbank()
-	f.hannWindow = f.createHannWindow()
+	f.window = f.createWindow()
 	return f
 }
 
-func (f *Filterbank) createHannWindow() []float64 {
-	win := make([]float64, f.winLength)
-	for i := range win {
-		win[i] = 0.5 * (1.0 - math.Cos(2.0*math.Pi*float64(i)/float64(f.winLength-1)))
+// createWindow builds the symmetric Hann window (matching numpy's
+// np.hanning(winLength)) zero-padded to nFFT so the non-zero part sits in the
+// middle of the FFT frame, like NeMo's centred STFT.
+func (f *Filterbank) createWindow() []float64 {
+	win := make([]float64, f.nFFT)
+	pad := (f.nFFT - f.winLength) / 2
+	for i := 0; i < f.winLength; i++ {
+		win[pad+i] = 0.5 * (1.0 - math.Cos(2.0*math.Pi*float64(i)/float64(f.winLength-1)))
 	}
 	return win
 }
 
-func hzToMel(hz float64) float64  { return 2595.0 * math.Log10(1.0+hz/700.0) }
-func melToHz(mel float64) float64 { return 700.0 * (math.Pow(10.0, mel/2595.0) - 1.0) }
+// Slaney mel scale: linear below 1 kHz, logarithmic above.
+const (
+	slaneyFreqSpread = 200.0 / 3.0
+	slaneyMinLogHz   = 1000.0
+	slaneyMinLogMel  = slaneyMinLogHz / slaneyFreqSpread // 15
+)
 
+var slaneyLogStep = math.Log(6.4) / 27.0
+
+func slaneyHzToMel(hz float64) float64 {
+	if hz < slaneyMinLogHz {
+		return hz / slaneyFreqSpread
+	}
+	return slaneyMinLogMel + math.Log(hz/slaneyMinLogHz)/slaneyLogStep
+}
+
+func slaneyMelToHz(mel float64) float64 {
+	if mel < slaneyMinLogMel {
+		return slaneyFreqSpread * mel
+	}
+	return slaneyMinLogHz * math.Exp(slaneyLogStep*(mel-slaneyMinLogMel))
+}
+
+// createMelFilterbank builds the Slaney mel filterbank: nMels+2 centre
+// frequencies on the mel scale, triangular weights evaluated continuously at
+// each FFT bin frequency, each filter area-normalised by 2/(f[i+2]-f[i]).
 func (f *Filterbank) createMelFilterbank() [][]float64 {
 	numBins := f.nFFT/2 + 1
-	melMin := hzToMel(0)
-	melMax := hzToMel(float64(f.sampleRate) / 2)
+	nyquist := float64(f.sampleRate) / 2.0
 
-	melPoints := make([]float64, f.nMels+2)
-	for i := range melPoints {
-		melPoints[i] = melMin + float64(i)*(melMax-melMin)/float64(f.nMels+1)
-	}
-	binPoints := make([]int, f.nMels+2)
-	for i, m := range melPoints {
-		binPoints[i] = int(math.Floor(float64(f.nFFT+1) * melToHz(m) / float64(f.sampleRate)))
+	hzPoints := make([]float64, f.nMels+2)
+	melMin := slaneyHzToMel(0)
+	melMax := slaneyHzToMel(nyquist)
+	for i := range hzPoints {
+		melPoints := melMin + float64(i)*(melMax-melMin)/float64(f.nMels+1)
+		hzPoints[i] = slaneyMelToHz(melPoints)
 	}
 
 	filterbank := make([][]float64, f.nMels)
 	for i := 0; i < f.nMels; i++ {
 		filter := make([]float64, numBins)
-		for j := binPoints[i]; j < binPoints[i+1] && j < numBins; j++ {
-			filter[j] = float64(j-binPoints[i]) / float64(binPoints[i+1]-binPoints[i])
+		lowerSlope := hzPoints[i+1] - hzPoints[i]
+		upperSlope := hzPoints[i+2] - hzPoints[i+1]
+		for j := 0; j < numBins; j++ {
+			freq := float64(j) * float64(f.sampleRate) / float64(f.nFFT)
+			rising := (freq - hzPoints[i]) / lowerSlope
+			falling := (hzPoints[i+2] - freq) / upperSlope
+			if w := math.Min(rising, falling); w > 0 {
+				filter[j] = w
+			}
 		}
-		for j := binPoints[i+1]; j < binPoints[i+2] && j < numBins; j++ {
-			filter[j] = float64(binPoints[i+2]-j) / float64(binPoints[i+2]-binPoints[i+1])
+		enorm := 2.0 / (hzPoints[i+2] - hzPoints[i])
+		for j := range filter {
+			filter[j] *= enorm
 		}
 		filterbank[i] = filter
 	}
@@ -86,66 +130,95 @@ func (f *Filterbank) HopLength() int {
 	return f.hopLength
 }
 
-// Extract computes log-mel filterbank features from audio samples.
+// Extract computes log-mel filterbank features from audio samples, matching
+// NeMo's AudioToMelSpectrogramPreprocessor (center=True, snip_edges=False):
+// the waveform is pre-emphasised, zero-padded by nFFT/2 on both sides, and
+// framed with a hop of hopLength, yielding len(samples)/hopLength frames.
 func (f *Filterbank) Extract(samples []float32) [][]float32 {
-	numFrames := (len(samples)-f.winLength)/f.hopLength + 1
+	numFrames := len(samples) / f.hopLength
 	if numFrames <= 0 {
 		return nil
 	}
 
+	// 1. Pre-emphasis: y[0] = x[0]; y[t] = x[t] - k*x[t-1].
+	pre := make([]float64, len(samples))
+	if f.preEmphasis > 0 {
+		var prev float64
+		for i, s := range samples {
+			cur := float64(s)
+			pre[i] = cur - f.preEmphasis*prev
+			prev = cur
+		}
+	} else {
+		for i, s := range samples {
+			pre[i] = float64(s)
+		}
+	}
+
+	// 2. Frame with nFFT/2 zero padding on each side, centred window.
+	pad := f.nFFT / 2
 	features := make([][]float32, numFrames)
+	windowed := make([]float64, f.nFFT)
+	numBins := f.nFFT/2 + 1
+
 	for frame := 0; frame < numFrames; frame++ {
-		start := frame * f.hopLength
-		windowed := make([]float64, f.nFFT)
-		for i := 0; i < f.winLength && start+i < len(samples); i++ {
-			windowed[i] = float64(samples[start+i]) * f.hannWindow[i]
+		base := frame*f.hopLength - pad
+		for i := 0; i < f.nFFT; i++ {
+			idx := base + i
+			if idx >= 0 && idx < len(pre) {
+				windowed[i] = pre[idx] * f.window[i]
+			} else {
+				windowed[i] = 0
+			}
 		}
 
 		spectrum := fft(windowed)
-		numBins := f.nFFT/2 + 1
+
 		melEnergies := make([]float32, f.nMels)
 		for i := 0; i < f.nMels; i++ {
 			var energy float64
+			fb := f.filterbank[i]
 			for j := 0; j < numBins; j++ {
-				energy += (real(spectrum[j])*real(spectrum[j]) + imag(spectrum[j])*imag(spectrum[j])) * f.filterbank[i][j]
+				re := real(spectrum[j])
+				im := imag(spectrum[j])
+				energy += (re*re + im*im) * fb[j]
 			}
-			if energy < 1e-10 {
-				energy = 1e-10
-			}
-			melEnergies[i] = float32(math.Log(energy))
+			melEnergies[i] = float32(math.Log(energy + logZeroGuard))
 		}
 		features[frame] = melEnergies
 	}
 
+	// 3. Per-feature normalisation over the whole utterance.
 	normalize(features)
 	return features
 }
 
+// normalize standardises each mel bin across frames with the sample variance
+// (N-1) and adds stdEpsilon to the denominator, matching NeMo's
+// normalize="per_feature".
 func normalize(features [][]float32) {
-	if len(features) == 0 {
+	if len(features) < 2 {
 		return
 	}
+	n := float64(len(features))
 	nFeatures := len(features[0])
-	means := make([]float64, nFeatures)
-	stds := make([]float64, nFeatures)
+
 	for i := 0; i < nFeatures; i++ {
-		var sum, sumSq float64
+		var sum float64
 		for _, frame := range features {
 			sum += float64(frame[i])
 		}
-		means[i] = sum / float64(len(features))
+		mean := sum / n
+
+		var varSum float64
 		for _, frame := range features {
-			d := float64(frame[i]) - means[i]
-			sumSq += d * d
+			d := float64(frame[i]) - mean
+			varSum += d * d
 		}
-		stds[i] = math.Sqrt(sumSq / float64(len(features)))
-		if stds[i] < 1e-10 {
-			stds[i] = 1e-10
-		}
-	}
-	for _, frame := range features {
-		for i := 0; i < nFeatures; i++ {
-			frame[i] = float32((float64(frame[i]) - means[i]) / stds[i])
+		denom := math.Sqrt(varSum/(n-1)) + stdEpsilon
+
+		for _, frame := range features {
+			frame[i] = float32((float64(frame[i]) - mean) / denom)
 		}
 	}
 }

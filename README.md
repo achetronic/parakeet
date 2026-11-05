@@ -315,12 +315,21 @@ chunk_%03d.wav`) or use a CPU image, which is bounded by system RAM instead.
 | `-gpu`                        | Execution provider: `cpu` or `cuda`                                      | `cpu`                      | `-gpu cuda`                            |
 | `-gpu-device`                 | GPU device index for `cuda`                                              | `0`                        | `-gpu-device 1`                        |
 | `-long-audio`                 | Split audio over the model limit into chunks instead of rejecting it     | `false`                    | `-long-audio`                          |
-| `-chunk-seconds`              | Sliding-window size for long audio, in seconds                           | `300`                      | `-chunk-seconds 240`                   |
-| `-chunk-overlap-seconds`      | Overlap between consecutive chunks, in seconds                           | `15`                       | `-chunk-overlap-seconds 10`            |
+| `-chunk-seconds`              | Sliding-window size for long audio, in seconds (keep ≤20 for multilingual accuracy — see note below) | `20`                       | `-chunk-seconds 240`                   |
+| `-chunk-overlap-seconds`      | Overlap between consecutive chunks, in seconds                           | `3`                        | `-chunk-overlap-seconds 10`            |
 | `-disable-vad-based-chunking` | Disable the Silero VAD chunk-boundary layer (falls back to mel energy)   | `false`                    | `-disable-vad-based-chunking`          |
 | `-disable-mel-based-chunking` | Disable the mel-energy chunk-boundary layer (falls back to the midpoint) | `false`                    | `-disable-mel-based-chunking`          |
 | `-vad-model-path`             | Path to the Silero VAD ONNX model                                        | `<models>/silero_vad.onnx` | `-vad-model-path /opt/silero_vad.onnx` |
 | `-enable-diarization`         | Load the diarization model and allow `diarize=true`                      | `false`                    | `-enable-diarization`                  |
+
+> **Why the window defaults are small.** `parakeet-tdt-0.6b-v3`'s multilingual
+> training utterances are capped at about 20s (~250 encoder frames), so its
+> relative positional attention only ever saw non-English speech inside that
+> horizon. Raising `-chunk-seconds` far above 20 pushes attention distances into
+> regions trained almost exclusively on English, and non-English audio starts
+> drifting into English or machine-translation output. The defaults (20s window,
+> 3s overlap) keep multilingual transcripts inside the trained range; raise them
+> only if you are transcribing English and want fewer chunks.
 
 **Examples:**
 

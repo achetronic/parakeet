@@ -318,7 +318,7 @@ func NewTranscriber(modelsDir string, workers int, opts Options) (*Transcriber, 
 	}
 
 	// Initialize mel filterbank
-	t.mel = mel.New(t.config.FeaturesSize, 16000, 512, 160, 400) // NeMo defaults: 512 FFT, 10 ms hop, 25 ms window
+	t.mel = mel.New(t.config.FeaturesSize, 16000, 512, 160, 400, 0.97) // NeMo preprocessor: 512 FFT, 10 ms hop, 25 ms window, 0.97 pre-emphasis
 
 	// Resolve chunk sizes (seconds to mel frames) and reject anything that
 	// would overrun the model's frame limit.
