@@ -302,3 +302,23 @@ Loud or dynamic music has no quiet frame, so the mel-energy layer degrades to ro
 - `Diarizer.Activity()` exposes the per-frame sigmoid probabilities; the merge consumes them directly.
 - Overlap: resolved by the highest summed activity over the word's span (padded to absorb ASR/diarization boundary jitter).
 - The transcription response gains a per-turn `speaker` field (opt-in via `diarize=true` + `-enable-diarization`).
+
+## DD-017: Per-Window Mel Normalization for Long Audio
+
+**Context**: Long-audio chunking fed each 60s window a slice of mel features that had been normalized per-feature over the WHOLE utterance. For a ~7 min file (and worse for hours) those statistics sit far from the ~utterance-length distribution the encoder saw in training. Measured exhaustively (build-tag `seameval`, English LibriSpeech test-clean, 423s): the encoder silently dropped whole utterances in the middle of a window — human WER 5.37%, oracle (chunked vs per-clip) 3.80%, with 29 deletions clustered at CLIP boundaries (right after the 0.5s inter-clip silence), NOT at chunk seams. The seam logic (DD-014) was already fine: near-seam localized WER was LOWER (1.77%) than interior (4.33%).
+
+**Decision**: Normalize each window's mel features over that window's own frames (copy + `mel.Normalize`) instead of normalizing the whole utterance globally. `mel.New` now extracts raw log-mel (`normalize=false`) and the per-window normalization happens in `transcribeSamples`.
+
+**Root cause (isolated)**: a single 60s pass with LOCAL normalization transcribed the problem window fully (168 words incl. the dropped utterance); the SAME window with GLOBAL normalization dropped utterance #27/#28 (121 words). A fresh transcriber on the same slice behaved identically, ruling out cross-window session state; re-normalizing the full-extraction slice locally recovered the content, ruling out the 56-sample mel boundary padding. The culprit was purely the normalization SCOPE.
+
+**Result** (same 423s English set): human WER 5.37% -> 3.42% — now AT the model's own short-clip baseline (3.6%), so long-audio chunking adds essentially no WER overhead. Oracle WER 3.80% -> 1.67%, deletions 29 -> 5, and the clip-boundary error hotspot vanishes. A second dataset (50 clips, 2s gaps) confirmed it: oracle 5.36% -> 2.84%, human 6.89% -> 5.25%.
+
+**Why safe for short audio**: a single-window request normalizes over its own (whole) utterance, identical to the previous global behaviour, so non-chunked transcription is unchanged.
+
+**Consequences**:
+
+- `internal/mel`: `normalize` exported as `Normalize`; `Filterbank.Extract` now leaves normalization to the caller when constructed with `normalize=false`.
+- `internal/asr/transcriber.go`: `mel.New(..., normalize=false)`; `transcribeSamples` copies each window's raw features and calls `mel.Normalize` before inference. `TranscribeStream` shares `transcribeSamples`, so both paths are fixed.
+- Each window copies ~6000x128 floats (≈3 MB) before normalization; acceptable overhead.
+- The mel-energy boundary oracle now sees raw log-mel (still a valid loudness proxy); VAD remains the primary layer.
+- Measurement harness kept in-repo: `internal/asr/seameval_test.go` (`-tags=seameval`) with an oracle alignment (chunked vs per-clip self-reference), S/D/I breakdown, and distance-to-seam / distance-to-clip-boundary histograms. Dataset generator is scratch Python in `/tmp/make_seameval.py` (reads LibriSpeech test-clean parquet).
