@@ -9,6 +9,20 @@ import (
 	"math/cmplx"
 )
 
+// NeMo AudioToMelSpectrogramPreprocessor constants. The extractor below
+// mirrors the frontend the model was trained on: a 0.97 pre-emphasis filter,
+// a 400-sample symmetric Hann window centred inside a zero-padded 512-point
+// FFT frame, a Slaney mel filterbank with area normalisation, a 2^-24 log
+// guard and per-feature mean/std normalisation with N-1 variance. Deviating
+// from this (the previous HTK-scale, un-pre-emphasised, left-aligned
+// implementation) muffles the high-frequency consonants the encoder relies
+// on and makes multilingual audio drift.
+const (
+	preEmphasis  = 0.97
+	logZeroGuard = 1.0 / (1 << 24) // 2^-24, NeMo's log guard
+	stdEpsilon   = 1e-5            // added to the std before dividing
+)
+
 // MelFilterbank computes mel-scale filterbank features
 type MelFilterbank struct {
 	nMels      int
@@ -16,8 +30,8 @@ type MelFilterbank struct {
 	nFFT       int
 	hopLength  int
 	winLength  int
-	filterbank [][]float64
-	hannWindow []float64
+	filterbank [][]float64 // [nMels][nFFT/2+1] continuous Slaney weights
+	window     []float64   // length nFFT: Hann(winLength) zero-padded to centre
 }
 
 // NewMelFilterbank creates a new mel filterbank extractor
@@ -31,53 +45,81 @@ func NewMelFilterbank(nMels, sampleRate int) *MelFilterbank {
 		winLength:  400, // 25ms at 16kHz
 	}
 	m.filterbank = m.createMelFilterbank()
-	m.hannWindow = m.createHannWindow()
+	m.window = m.createWindow()
 	return m
 }
 
-func (m *MelFilterbank) createHannWindow() []float64 {
-	win := make([]float64, m.winLength)
+// createWindow builds the symmetric Hann window (matching numpy's
+// np.hanning(winLength)) zero-padded to nFFT so the non-zero part sits in
+// the middle of the FFT frame, exactly like NeMo's centred STFT.
+func (m *MelFilterbank) createWindow() []float64 {
+	win := make([]float64, m.nFFT)
+	pad := (m.nFFT - m.winLength) / 2
 	for i := 0; i < m.winLength; i++ {
-		win[i] = 0.5 * (1.0 - math.Cos(2.0*math.Pi*float64(i)/float64(m.winLength-1)))
+		win[pad+i] = 0.5 * (1.0 - math.Cos(2.0*math.Pi*float64(i)/float64(m.winLength-1)))
 	}
 	return win
 }
 
-func (m *MelFilterbank) hzToMel(hz float64) float64 {
-	return 2595.0 * math.Log10(1.0+hz/700.0)
+// Slaney mel scale: linear below 1 kHz, logarithmic above. This is the scale
+// NeMo/librosa use; the HTK formula the old implementation used places the
+// filter centres differently and was one source of the multilingual drift.
+const (
+	slaneyFreqSpread = 200.0 / 3.0
+	slaneyMinLogHz   = 1000.0
+	slaneyMinLogMel  = slaneyMinLogHz / slaneyFreqSpread // 15
+)
+
+// slaneyLogStep is the per-mel log step above 1 kHz in the Slaney scale.
+var slaneyLogStep = math.Log(6.4) / 27.0
+
+func slaneyHzToMel(hz float64) float64 {
+	if hz < slaneyMinLogHz {
+		return hz / slaneyFreqSpread
+	}
+	return slaneyMinLogMel + math.Log(hz/slaneyMinLogHz)/slaneyLogStep
 }
 
-func (m *MelFilterbank) melToHz(mel float64) float64 {
-	return 700.0 * (math.Pow(10.0, mel/2595.0) - 1.0)
+func slaneyMelToHz(mel float64) float64 {
+	if mel < slaneyMinLogMel {
+		return slaneyFreqSpread * mel
+	}
+	return slaneyMinLogHz * math.Exp(slaneyLogStep*(mel-slaneyMinLogMel))
 }
 
+// createMelFilterbank builds the Slaney mel filterbank: nMels+2 centre
+// frequencies evenly spaced on the mel scale between 0 Hz and Nyquist,
+// triangular weights evaluated continuously at each FFT bin frequency (no
+// integer-bin quantisation), each filter area-normalised by 2/(f[i+2]-f[i]).
+// It matches onnx-asr's fbanks.npz["nemo128"] to ~3e-8.
 func (m *MelFilterbank) createMelFilterbank() [][]float64 {
 	numBins := m.nFFT/2 + 1
-	melMin := m.hzToMel(0)
-	melMax := m.hzToMel(float64(m.sampleRate) / 2)
+	nyquist := float64(m.sampleRate) / 2.0
 
-	// Create mel points
-	melPoints := make([]float64, m.nMels+2)
-	for i := 0; i <= m.nMels+1; i++ {
-		melPoints[i] = melMin + float64(i)*(melMax-melMin)/float64(m.nMels+1)
+	hzPoints := make([]float64, m.nMels+2)
+	melMin := slaneyHzToMel(0)
+	melMax := slaneyHzToMel(nyquist)
+	for i := range hzPoints {
+		mel := melMin + float64(i)*(melMax-melMin)/float64(m.nMels+1)
+		hzPoints[i] = slaneyMelToHz(mel)
 	}
 
-	// Convert to bin indices
-	binPoints := make([]int, m.nMels+2)
-	for i, mel := range melPoints {
-		hz := m.melToHz(mel)
-		binPoints[i] = int(math.Floor(float64(m.nFFT+1) * hz / float64(m.sampleRate)))
-	}
-
-	// Create filterbank
 	filterbank := make([][]float64, m.nMels)
 	for i := 0; i < m.nMels; i++ {
 		filter := make([]float64, numBins)
-		for j := binPoints[i]; j < binPoints[i+1] && j < numBins; j++ {
-			filter[j] = float64(j-binPoints[i]) / float64(binPoints[i+1]-binPoints[i])
+		lowerSlope := hzPoints[i+1] - hzPoints[i]
+		upperSlope := hzPoints[i+2] - hzPoints[i+1]
+		for j := 0; j < numBins; j++ {
+			freq := float64(j) * float64(m.sampleRate) / float64(m.nFFT)
+			rising := (freq - hzPoints[i]) / lowerSlope
+			falling := (hzPoints[i+2] - freq) / upperSlope
+			if w := math.Min(rising, falling); w > 0 {
+				filter[j] = w
+			}
 		}
-		for j := binPoints[i+1]; j < binPoints[i+2] && j < numBins; j++ {
-			filter[j] = float64(binPoints[i+2]-j) / float64(binPoints[i+2]-binPoints[i+1])
+		enorm := 2.0 / (hzPoints[i+2] - hzPoints[i])
+		for j := range filter {
+			filter[j] *= enorm
 		}
 		filterbank[i] = filter
 	}
@@ -99,95 +141,100 @@ func (m *MelFilterbank) HopLength() int {
 	return m.hopLength
 }
 
-// Extract computes mel filterbank features from audio samples
+// Extract computes mel filterbank features from audio samples, matching
+// NeMo's AudioToMelSpectrogramPreprocessor (center=True, snip_edges=False):
+// the waveform is pre-emphasised, zero-padded by nFFT/2 on both sides, and
+// framed with a hop of hopLength, yielding len(samples)/hopLength frames.
 func (m *MelFilterbank) Extract(samples []float32) [][]float32 {
-	numFrames := (len(samples)-m.winLength)/m.hopLength + 1
+	numFrames := len(samples) / m.hopLength
 	if numFrames <= 0 {
 		if DebugMode {
-			slog.Debug("not enough samples for mel frame", "samples", len(samples), "winLength", m.winLength)
+			slog.Debug("not enough samples for mel frame", "samples", len(samples), "hopLength", m.hopLength)
 		}
 		return nil
 	}
 
+	// 1. Pre-emphasis over the whole waveform: y[0] = x[0];
+	//    y[t] = x[t] - 0.97 * x[t-1]. This lifts the high-frequency
+	//    consonant formants (s, ß, sch, ch, t, z) that the model needs.
+	pre := make([]float64, len(samples))
+	var prev float64
+	for i, s := range samples {
+		cur := float64(s)
+		pre[i] = cur - preEmphasis*prev
+		prev = cur
+	}
+
+	// 2. Frame the pre-emphasised signal with nFFT/2 zero padding on each
+	//    side and apply the centred window.
+	pad := m.nFFT / 2
 	features := make([][]float32, numFrames)
+	windowed := make([]float64, m.nFFT)
+	numBins := m.nFFT/2 + 1
 
 	for frame := 0; frame < numFrames; frame++ {
-		start := frame * m.hopLength
-		end := start + m.winLength
-		if end > len(samples) {
-			end = len(samples)
-		}
-
-		// Extract frame and apply pre-computed Hann window
-		windowed := make([]float64, m.nFFT)
-		for i := 0; i < end-start && i < m.winLength; i++ {
-			windowed[i] = float64(samples[start+i]) * m.hannWindow[i]
+		base := frame*m.hopLength - pad
+		for i := 0; i < m.nFFT; i++ {
+			idx := base + i
+			if idx >= 0 && idx < len(pre) {
+				windowed[i] = pre[idx] * m.window[i]
+			} else {
+				windowed[i] = 0
+			}
 		}
 
 		// FFT
 		spectrum := m.fft(windowed)
 
-		// Power spectrum
-		numBins := m.nFFT/2 + 1
-		power := make([]float64, numBins)
-		for i := 0; i < numBins; i++ {
-			power[i] = real(spectrum[i])*real(spectrum[i]) + imag(spectrum[i])*imag(spectrum[i])
-		}
-
-		// Apply mel filterbank
+		// Power spectrum applied through the mel filterbank
 		melEnergies := make([]float32, m.nMels)
 		for i := 0; i < m.nMels; i++ {
 			var energy float64
+			fb := m.filterbank[i]
 			for j := 0; j < numBins; j++ {
-				energy += power[j] * m.filterbank[i][j]
+				re := real(spectrum[j])
+				im := imag(spectrum[j])
+				energy += (re*re + im*im) * fb[j]
 			}
-			// Log mel energy
-			if energy < 1e-10 {
-				energy = 1e-10
-			}
-			melEnergies[i] = float32(math.Log(energy))
+			melEnergies[i] = float32(math.Log(energy + logZeroGuard))
 		}
 
 		features[frame] = melEnergies
 	}
 
-	// Normalize (optional but helpful)
+	// 3. Per-feature normalisation over the whole utterance.
 	m.normalize(features)
 
 	return features
 }
 
+// normalize standardises each mel bin across frames with the sample
+// variance (N-1) and adds stdEpsilon to the denominator, matching NeMo's
+// normalize="per_feature".
 func (m *MelFilterbank) normalize(features [][]float32) {
-	if len(features) == 0 {
+	if len(features) < 2 {
 		return
 	}
 
-	// Compute mean and std per feature
+	n := float64(len(features))
 	nFeatures := len(features[0])
-	means := make([]float64, nFeatures)
-	stds := make([]float64, nFeatures)
 
 	for i := 0; i < nFeatures; i++ {
-		var sum, sumSq float64
+		var sum float64
 		for _, frame := range features {
 			sum += float64(frame[i])
 		}
-		means[i] = sum / float64(len(features))
+		mean := sum / n
+
+		var varSum float64
+		for _, frame := range features {
+			d := float64(frame[i]) - mean
+			varSum += d * d
+		}
+		denom := math.Sqrt(varSum/(n-1)) + stdEpsilon
 
 		for _, frame := range features {
-			diff := float64(frame[i]) - means[i]
-			sumSq += diff * diff
-		}
-		stds[i] = math.Sqrt(sumSq / float64(len(features)))
-		if stds[i] < 1e-10 {
-			stds[i] = 1e-10
-		}
-	}
-
-	// Apply normalization
-	for _, frame := range features {
-		for i := 0; i < nFeatures; i++ {
-			frame[i] = float32((float64(frame[i]) - means[i]) / stds[i])
+			frame[i] = float32((float64(frame[i]) - mean) / denom)
 		}
 	}
 }
