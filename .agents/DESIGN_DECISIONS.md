@@ -322,3 +322,26 @@ Loud or dynamic music has no quiet frame, so the mel-energy layer degrades to ro
 - Each window copies ~6000x128 floats (≈3 MB) before normalization; acceptable overhead.
 - The mel-energy boundary oracle now sees raw log-mel (still a valid loudness proxy); VAD remains the primary layer.
 - Measurement harness kept in-repo: `internal/asr/seameval_test.go` (`-tags=seameval`) with an oracle alignment (chunked vs per-clip self-reference), S/D/I breakdown, and distance-to-seam / distance-to-clip-boundary histograms. Dataset generator is scratch Python in `/tmp/make_seameval.py` (reads LibriSpeech test-clean parquet).
+
+## DD-018: Real Timed Segments From Decoder Token Positions
+
+**Context**: `verbose_json` returned a single fabricated segment covering `0` to `duration` (`tokens: []`, `avg_logprob: -0.5`, `compression_ratio: 1.0`), and `srt`/`vtt` emitted one cue spanning the whole file. Worse, `duration` was `len(uploadedBytes)/(16000*2)`: meaningless for compressed input (an 820 KB MP3 reported 25.6 s for ~40 s of speech).
+
+**Decision**: Report real segments from information the decoder already produces, and measure duration from the decoded waveform. `tdtDecode` already tags every emitted token with its absolute encoder-frame timestep and reads the duration head's frame count; `decodedToken` now also carries `logprob` (log probability of the greedy pick). `buildSegments` (`internal/asr/segments.go`) groups the token list into timed `Segment` values; `TranscribeDetailed` returns `Result{Text, Duration, Segments}` for the HTTP handler.
+
+**This is a reporting layer, not audio segmentation.** The model sees the same waveform; nothing is skipped, re-windowed, or VAD-gated. DD-014's rejection of full-file VAD segmentation stands.
+
+### Timing basis
+
+One encoder frame covers `subsampling * hop / sampleRate` seconds (`Transcriber.encoderFrameSeconds`): `8 * 160 / 16000 = 0.08 s`. A token spans `[timestep, timestep+duration)`. `buildSegments` closes a segment before the current token when: the gap from the previous token's end exceeds `segmentGapFrames` (8 frames, ~0.64 s); the previous token ended a sentence (`.!?…`); the segment holds `segmentMaxTokens` (220); or adding this token spans `segmentMaxFrames` (375 frames, 30 s). Constants, not flags (per DD-014). Tokens with no printable text are dropped, the same rule `tokenText` applies, so segment texts concatenate back to `text`.
+
+### Duration and OpenAI fidelity
+
+`duration = len(waveform) / Filterbank.SampleRate()` (audio is resampled to 16 kHz mono, so this is the true length for any input). `avg_logprob` is the mean token log-prob via `logProb` (`logit - logsumexp`); `compression_ratio` is `len(text)/len(gzip(text))`; `seek` is the segment start in ms; `temperature` and `no_speech_prob` stay 0 (greedy TDT has neither), reported rather than omitted. `segments` lost its `omitempty` so the key is always present. `srt`/`vtt` emit one cue per segment; `formatSRTTime`/`formatVTTTime` now round to whole ms once (fixes 1.2 s → `01,199` and 59.9996 s not carrying).
+
+**Consequences**:
+
+- New `internal/asr/segments.go` + `segments_test.go`; `decodedToken` gains `logprob` (seam dedup ignores it); `Filterbank` gains `SampleRate()`.
+- `internal/server/handlers.go` gains `toAPISegments`, `compressionRatio`, `renderSRT`, `renderVTT`; `response_test.go` covers them.
+- Streaming (`stream=true`) unchanged: OpenAI's SSE protocol carries text deltas, not segments.
+- Segment boundaries are heuristic: a mis-predicted duration shifts an edge by ≤ a frame or two (80 ms), not a forced alignment like Whisper's.

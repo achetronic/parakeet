@@ -8,13 +8,15 @@ type TranscriptionResponse struct {
 	Text string `json:"text"`
 }
 
-// VerboseTranscriptionResponse represents a detailed transcription result
+// VerboseTranscriptionResponse represents a detailed transcription result.
+// Segments has no omitempty: verbose_json clients expect the key to exist even
+// when the audio produced no speech and the list is empty.
 type VerboseTranscriptionResponse struct {
 	Task     string    `json:"task"`
 	Language string    `json:"language"`
 	Duration float64   `json:"duration"`
 	Text     string    `json:"text"`
-	Segments []Segment `json:"segments,omitempty"`
+	Segments []Segment `json:"segments"`
 }
 
 // SpeakerTurn is a speaker-attributed transcription segment.
@@ -34,7 +36,12 @@ type DiarizedTranscriptionResponse struct {
 	Segments []SpeakerTurn `json:"segments"`
 }
 
-// Segment represents a transcription segment with timing information
+// Segment represents a transcription segment with timing information.
+// Start and End are seconds; Seek is the segment start in milliseconds, matching
+// OpenAI's verbose_json field. AvgLogprob is the mean log probability the decoder
+// assigned to this segment's tokens. CompressionRatio is the gzip ratio of the
+// segment text, the same metric OpenAI reports. NoSpeechProb stays 0 because the
+// TDT decoder has no no-speech head.
 type Segment struct {
 	ID               int     `json:"id"`
 	Seek             int     `json:"seek"`

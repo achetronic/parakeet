@@ -29,10 +29,16 @@ const (
 // encoder-frame timestep. Absolute timesteps (as opposed to per-window local
 // ones) let dedupSeam line up tokens emitted by two different windows that cover
 // the same audio around a seam.
+//
+// duration is how many encoder frames the duration head predicted for this token
+// (at least 1 when a positive duration is needed; 0 means same-frame continuation)
+// and logprob is the log probability of the greedy pick at emit time. dedupSeam
+// ignores both; buildSegments uses them to produce timed segments. See segments.go.
 type decodedToken struct {
 	id       int
 	timestep int64
 	duration int64 // TDT duration class (step), in encoder frames; 0 = same-frame continuation
+	logprob  float32
 }
 
 // dedupSeam decides which of window i+1's leading tokens (head) survive when
