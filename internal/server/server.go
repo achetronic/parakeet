@@ -9,10 +9,13 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"parakeet/internal/asr"
+	"parakeet/internal/audio"
+	"parakeet/internal/diarization"
 )
 
 const apiKeyEnvVar = "PARAKEET_API_KEY"
@@ -60,12 +63,19 @@ type Config struct {
 	DisableVADBasedChunking bool
 	DisableMelBasedChunking bool
 	VADModelPath            string
+
+	// EnableDiarization loads the Nemotron-3-Diarization model at startup and
+	// enables the diarize=true transcription parameter. Off by default so
+	// Parakeet-only deployments work without the extra model.
+	EnableDiarization bool
 }
 
 // Server represents the HTTP server for the ASR service
 type Server struct {
 	config      Config
+	converter   *audio.Converter
 	transcriber *asr.Transcriber
+	diarizer    *diarization.Diarizer
 	httpServer  *http.Server
 	mux         *http.ServeMux
 	apiKey      string
@@ -73,21 +83,24 @@ type Server struct {
 
 // New creates a new Server instance with the given configuration
 func New(cfg Config) (*Server, error) {
-	// Enable debug mode in ASR package
+	// Enable debug mode in the ASR and audio packages.
 	asr.DebugMode = cfg.LogLevel == "debug"
+	audio.Debug = cfg.LogLevel == "debug"
 
 	provider, err := asr.ParseProvider(cfg.GPUProvider)
 	if err != nil {
 		return nil, err
 	}
 
+	converter := audio.NewConverter(audio.FFmpegConfig{
+		Enabled:    cfg.FFmpegEnabled,
+		BinaryPath: cfg.FFmpegPath,
+		Timeout:    cfg.FFmpegTimeout,
+	})
+
 	// Initialize transcriber
 	transcriber, err := asr.NewTranscriber(cfg.ModelsDir, cfg.Workers, asr.Options{
-		FFmpeg: asr.FFmpegConfig{
-			Enabled:    cfg.FFmpegEnabled,
-			BinaryPath: cfg.FFmpegPath,
-			Timeout:    cfg.FFmpegTimeout,
-		},
+		FFmpeg: converter,
 		GPU: asr.GPUConfig{
 			Provider: provider,
 			DeviceID: cfg.GPUDeviceID,
@@ -107,9 +120,24 @@ func New(cfg Config) (*Server, error) {
 		return nil, fmt.Errorf("failed to initialize transcriber: %w", err)
 	}
 
+	// Initialize the diarizer only when speaker diarization is enabled (opt-in
+	// via -enable-diarization). It is off by default so Parakeet-only
+	// deployments do not need the extra model.
+	var diarizer *diarization.Diarizer
+	if cfg.EnableDiarization {
+		d, err := diarization.New(filepath.Join(cfg.ModelsDir, "diarization"))
+		if err != nil {
+			transcriber.Close()
+			return nil, fmt.Errorf("failed to initialize diarizer: %w", err)
+		}
+		diarizer = d
+	}
+
 	s := &Server{
 		config:      cfg,
+		converter:   converter,
 		transcriber: transcriber,
+		diarizer:    diarizer,
 		mux:         http.NewServeMux(),
 		apiKey:      os.Getenv(apiKeyEnvVar),
 	}
@@ -190,6 +218,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 func (s *Server) Close() error {
 	if s.transcriber != nil {
 		s.transcriber.Close()
+	}
+	if s.diarizer != nil {
+		s.diarizer.Close()
 	}
 	return nil
 }

@@ -16,6 +16,10 @@ import (
 	"strings"
 
 	ort "github.com/yalue/onnxruntime_go"
+
+	"parakeet/internal/audio"
+	"parakeet/internal/mel"
+	"parakeet/internal/ortutil"
 )
 
 // DebugMode enables verbose logging
@@ -191,18 +195,19 @@ type Transcriber struct {
 	longAudio          bool
 	disableVADChunking bool
 	disableMelChunking bool
-	mel                *MelFilterbank
+	mel                *mel.Filterbank
 	encoder            *ort.DynamicAdvancedSession
 	vad                *sileroVAD
 	decoderPool        chan *decoderWorker
-	ffmpeg             *ffmpegConverter
+	ffmpeg             *audio.Converter
+	envInit            bool
 }
 
 // Options groups optional knobs passed to NewTranscriber. Zero values keep
 // the previous behavior: WAV-only input, no ffmpeg conversion, CPU inference,
 // default chunk sizes, and the full boundary stack (VAD then mel then midpoint).
 type Options struct {
-	FFmpeg   FFmpegConfig
+	FFmpeg   *audio.Converter
 	GPU      GPUConfig
 	Chunk    ChunkConfig
 	Boundary BoundaryConfig
@@ -280,14 +285,13 @@ func buildSessionOptions(gpu GPUConfig) (*ort.SessionOptions, error) {
 }
 
 // NewTranscriber loads models and initializes the decoder worker pool.
-// When opts.FFmpeg.Enabled is true and the ffmpeg binary is resolvable,
-// non-WAV inputs will be transcoded on the fly. Otherwise, only WAV is
-// accepted and non-WAV inputs return ErrUnsupportedAudio.
+// When opts.FFmpeg is non-nil, non-WAV inputs are transcoded on the fly.
+// Otherwise only WAV is accepted and non-WAV inputs return audio.ErrUnsupportedAudio.
 func NewTranscriber(modelsDir string, workers int, opts Options) (*Transcriber, error) {
 	t := &Transcriber{
 		maxTokensPerStep: 10,
 		blankIdx:         8192,
-		ffmpeg:           newFFmpegConverter(opts.FFmpeg),
+		ffmpeg:           opts.FFmpeg,
 	}
 
 	// Load config
@@ -314,7 +318,7 @@ func NewTranscriber(modelsDir string, workers int, opts Options) (*Transcriber, 
 	}
 
 	// Initialize mel filterbank
-	t.mel = NewMelFilterbank(t.config.FeaturesSize, 16000)
+	t.mel = mel.New(t.config.FeaturesSize, 16000, 512, 160, 400, 0.97, true) // NeMo preprocessor: 512 FFT, 10 ms hop, 25 ms window, 0.97 pre-emphasis, normalize
 
 	// Resolve chunk sizes (seconds to mel frames) and reject anything that
 	// would overrun the model's frame limit.
@@ -338,32 +342,13 @@ func NewTranscriber(modelsDir string, workers int, opts Options) (*Transcriber, 
 		}
 	}
 
-	// Initialize ONNX Runtime
-	libPath := os.Getenv("ONNXRUNTIME_LIB")
-	if libPath == "" {
-		commonPaths := []string{
-			"/usr/lib/libonnxruntime.so",
-			"/usr/lib/x86_64-linux-gnu/libonnxruntime.so",
-			"/usr/local/lib/libonnxruntime.so",
-			"/opt/onnxruntime/lib/libonnxruntime.so",
-			"./libonnxruntime.so",
-			"libonnxruntime.so.1.25.1",
-		}
-		for _, p := range commonPaths {
-			if _, err := os.Stat(p); err == nil {
-				libPath = p
-				break
-			}
-		}
+	// Initialize ONNX Runtime. The first caller in the process initializes the
+	// environment and owns its teardown; later callers share it.
+	envInit, err := ortutil.Init()
+	if err != nil {
+		return nil, err
 	}
-	if libPath == "" {
-		return nil, fmt.Errorf("ONNX Runtime library not found. Set ONNXRUNTIME_LIB env var or install libonnxruntime")
-	}
-
-	ort.SetSharedLibraryPath(libPath)
-	if err := ort.InitializeEnvironment(); err != nil {
-		return nil, fmt.Errorf("failed to initialize ONNX Runtime: %w", err)
-	}
+	t.envInit = envInit
 
 	// Resolve encoder path
 	encoderPath := filepath.Join(modelsDir, "encoder-model.int8.onnx")
@@ -519,11 +504,17 @@ func (t *Transcriber) Close() {
 			w.destroy()
 		}
 	}
-	ort.DestroyEnvironment()
+	if t.envInit {
+		ort.DestroyEnvironment()
+	}
 }
 
 func (t *Transcriber) Transcribe(ctx context.Context, audioData []byte, format, language string) (string, error) {
-	return t.transcribe(ctx, audioData, format, language, nil)
+	tokens, err := t.transcribe(ctx, audioData, format, language, nil)
+	if err != nil {
+		return "", err
+	}
+	return t.tokensToText(tokens), nil
 }
 
 // TranscribeStream behaves like Transcribe but invokes emit with each new
@@ -535,22 +526,30 @@ func (t *Transcriber) Transcribe(ctx context.Context, audioData []byte, format, 
 // concatenation by surrounding/duplicate spaces only.
 // emit is always called from the same goroutine that called TranscribeStream.
 func (t *Transcriber) TranscribeStream(ctx context.Context, audioData []byte, format, language string, emit func(delta string)) (string, error) {
-	return t.transcribe(ctx, audioData, format, language, emit)
+	tokens, err := t.transcribe(ctx, audioData, format, language, emit)
+	if err != nil {
+		return "", err
+	}
+	return t.tokensToText(tokens), nil
 }
 
 // transcribe is the shared implementation. When emit is non-nil, decoded text
 // is streamed delta by delta as tokens are produced.
-func (t *Transcriber) transcribe(ctx context.Context, audioData []byte, format, language string, emit func(delta string)) (string, error) {
-	// Let's check context immediately
+func (t *Transcriber) transcribe(ctx context.Context, audioData []byte, format, language string, emit func(delta string)) ([]decodedToken, error) {
+	waveform, err := audio.Load(audioData, t.ffmpeg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load audio: %w", err)
+	}
+	return t.transcribeSamples(ctx, waveform, emit)
+}
+
+// transcribeSamples transcribes already-loaded mono 16 kHz samples; it is the
+// shared core behind the byte-based and samples-based entry points.
+func (t *Transcriber) transcribeSamples(ctx context.Context, waveform []float32, emit func(delta string)) ([]decodedToken, error) {
 	select {
 	case <-ctx.Done():
-		return "", ctx.Err()
+		return nil, ctx.Err()
 	default:
-	}
-
-	waveform, err := t.loadAudio(audioData, format)
-	if err != nil {
-		return "", fmt.Errorf("failed to load audio: %w", err)
 	}
 
 	if DebugMode {
@@ -561,12 +560,12 @@ func (t *Transcriber) transcribe(ctx context.Context, audioData []byte, format, 
 		if DebugMode {
 			slog.Debug("audio too short, skipping", "samples", len(waveform))
 		}
-		return "", nil
+		return nil, nil
 	}
 
 	features := t.mel.Extract(waveform)
 	if len(features) == 0 {
-		return "", fmt.Errorf("no features extracted")
+		return nil, fmt.Errorf("no features extracted")
 	}
 
 	if DebugMode {
@@ -583,7 +582,7 @@ func (t *Transcriber) transcribe(ctx context.Context, audioData []byte, format, 
 		slog.Warn("audio exceeds the single-pass model limit; enable --long-audio to transcribe long files in overlapping chunks",
 			"seconds", float64(len(features))/float64(t.mel.FramesPerSecond()),
 			"limitSeconds", float64(modelMaxEncoderFrames*subsampling)/float64(t.mel.FramesPerSecond()))
-		return "", err
+		return nil, err
 	}
 
 	if DebugMode {
@@ -618,7 +617,7 @@ func (t *Transcriber) transcribe(ctx context.Context, audioData []byte, format, 
 
 		windowTokens, err := t.runInference(ctx, features[win.start:win.end], emitStart, emitEnd, frameOffset, holdFirst, resolveSeam, emit)
 		if err != nil {
-			return "", fmt.Errorf("inference failed: %w", err)
+			return nil, fmt.Errorf("inference failed: %w", err)
 		}
 		tokens = append(tokens, windowTokens...)
 		prevTail = windowTokens
@@ -628,7 +627,7 @@ func (t *Transcriber) transcribe(ctx context.Context, audioData []byte, format, 
 		slog.Debug("tokens decoded", "count", len(tokens))
 	}
 
-	return t.tokensToText(tokens), nil
+	return tokens, nil
 }
 
 // newBoundaryOracle builds the per-request chunk-boundary cascade over this
@@ -650,41 +649,6 @@ func (t *Transcriber) newBoundaryOracle(features [][]float32, waveform []float32
 	}
 	oracles = append(oracles, midpointBoundaryOracle{})
 	return chainBoundaryOracle{oracles: oracles}
-}
-
-// loadAudio decodes raw request bytes into mono 16 kHz float32 samples.
-//
-// Detection is done by content, not by filename extension: an OpenAI client
-// is free to upload a file without an extension or with a misleading one,
-// and the transcription endpoint only ever sees bytes. WAV inputs are
-// parsed in-process with zero external dependencies. Anything else is
-// delegated to the optional ffmpeg converter; when ffmpeg is unavailable
-// the call fails with ErrUnsupportedAudio so the HTTP layer can surface a
-// 400 response instead of a generic 500.
-//
-// The `format` parameter is kept for logging and future heuristics, but it
-// is intentionally not used to pick the decoder.
-func (t *Transcriber) loadAudio(data []byte, format string) ([]float32, error) {
-	if isWAV(data) {
-		return parseWAV(data)
-	}
-
-	if t.ffmpeg == nil {
-		return nil, fmt.Errorf("input is not WAV and ffmpeg conversion is disabled: %w", ErrUnsupportedAudio)
-	}
-
-	if DebugMode {
-		slog.Debug("converting audio via ffmpeg",
-			"format", format,
-			"bytes", len(data),
-		)
-	}
-
-	wavData, err := t.ffmpeg.Convert(data)
-	if err != nil {
-		return nil, err
-	}
-	return parseWAV(wavData)
 }
 
 func (t *Transcriber) runInference(ctx context.Context, features [][]float32, emitStart, emitEnd, frameOffset int64, holdFirst int, resolveSeam func(head []decodedToken) []decodedToken, emit func(delta string)) ([]decodedToken, error) {
@@ -866,7 +830,7 @@ func (t *Transcriber) tdtDecode(ctx context.Context, encoderOut []float32, encod
 			// Collect and stream only tokens this window owns; the rest belong
 			// to an adjacent window's overlap and would duplicate speech.
 			if timestep >= emitStart && timestep < emitEnd {
-				dt := decodedToken{id: token, timestep: frameOffset + timestep}
+				dt := decodedToken{id: token, timestep: frameOffset + timestep, duration: int64(step)}
 				if resolved {
 					result = append(result, dt)
 					emitText(dt.id)

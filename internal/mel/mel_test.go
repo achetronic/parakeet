@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Alby Hernández <hola@achetronic.com>
 // SPDX-License-Identifier: Apache-2.0
 
-package asr
+package mel
 
 import (
 	"math"
@@ -24,12 +24,9 @@ func nemoTestSignal() []float32 {
 }
 
 // TestMelMatchesNemoGolden pins the extractor against values produced by
-// onnx-asr's NemoPreprocessorNumpy (itself matching nemo128.onnx to
-// ~7e-5) for nemoTestSignal(). If the mel math drifts from NeMo's
-// frontend, these values move and the test fails loudly: the multilingual
-// drift this guards against is invisible on clean studio audio.
+// onnx-asr's NemoPreprocessorNumpy (itself matching nemo128.onnx to ~7e-5).
 func TestMelMatchesNemoGolden(t *testing.T) {
-	m := NewMelFilterbank(128, 16000)
+	m := New(128, 16000, 512, 160, 400, 0.97, true)
 	features := m.Extract(nemoTestSignal())
 
 	if len(features) != 100 {
@@ -65,7 +62,7 @@ func TestMelMatchesNemoGolden(t *testing.T) {
 }
 
 func TestMelNormalization(t *testing.T) {
-	m := NewMelFilterbank(128, 16000)
+	m := New(128, 16000, 512, 160, 400, 0.97, true)
 	features := m.Extract(nemoTestSignal())
 
 	n := float64(len(features))
@@ -91,7 +88,7 @@ func TestMelNormalization(t *testing.T) {
 }
 
 func TestMelFrameCount(t *testing.T) {
-	m := NewMelFilterbank(128, 16000)
+	m := New(128, 16000, 512, 160, 400, 0.97, true)
 	cases := []struct {
 		samples int
 		want    int
@@ -114,8 +111,6 @@ func TestMelFrameCount(t *testing.T) {
 }
 
 func TestSlaneyMelScale(t *testing.T) {
-	// Slaney scale is linear below 1 kHz (f_sp = 200/3 Hz per mel) and
-	// log above; mel_to_hz must invert hz_to_mel at both ends.
 	for _, hz := range []float64{0, 100, 999, 1000, 2000, 7999} {
 		back := slaneyMelToHz(slaneyHzToMel(hz))
 		if math.Abs(back-hz) > 1e-6 {

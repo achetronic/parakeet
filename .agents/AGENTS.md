@@ -11,6 +11,7 @@ This document helps AI agents work effectively in this codebase.
 - **Language**: Go 1.25+
 - **ML Runtime**: ONNX Runtime 1.25.x (CPU by default; optional CUDA GPU via execution providers)
 - **Model**: NVIDIA Parakeet TDT 0.6B (Conformer-based encoder with Token-and-Duration Transducer decoder)
+- **Diarization**: NVIDIA Nemotron-3-Diarization (100M, up to 8 speakers, ONNX int8/fp32)
 - **API**: REST, OpenAI Whisper-compatible
 
 ## Essential Commands
@@ -30,6 +31,8 @@ make models                 # Download int8 models (default, ~670MB)
 make models-int8            # Download int8 quantized models
 make models-fp32            # Download full precision models (~2.5GB)
 make models-silero-vad      # Download + verify the Silero VAD model (MIT, pinned)
+make models-diarization-int8  # Download int8 diarization model (~120MB)
+make models-diarization-fp32  # Download fp32 diarization model (~400MB)
 
 # Test
 make test                   # Run tests
@@ -72,14 +75,21 @@ parakeet/
 │   │   ├── boundary.go     # Chunk-boundary oracle cascade (VAD -> mel energy -> midpoint)
 │   │   ├── vad.go          # Silero VAD ONNX session wrapper (shared, stateful via tensors)
 │   │   ├── seam.go         # Seam-level token dedup (absolute-timestep based)
-│   │   ├── mel.go          # Mel filterbank feature extraction (FFT, windowing)
-│   │   ├── audio.go        # WAV parsing, magic-byte detection, resampling to 16kHz
-│   │   ├── ffmpeg.go       # Optional ffmpeg-backed converter for non-WAV inputs
-│   │   ├── audio_test.go   # Unit + concurrency tests for audio/ffmpeg logic
+│   │   ├── words.go        # Word-level timestamps (Word + TranscribeWordsSamples)
 │   │   └── provider_test.go # Execution-provider parsing/selection tests
+│   ├── diarization/        # Nemotron-3-Diarization (speaker diarization)
+│   │   ├── config.go       # Model config loader
+│   │   ├── features.go     # Pre-emphasis + shared mel features
+│   │   ├── model.go        # ONNX session
+│   │   ├── aosc.go         # AOSC/FIFO speaker cache
+│   │   └── diarizer.go     # Diarize() orchestration
+│   ├── audio/              # WAV/ffmpeg decoding to 16kHz mono samples
+│   ├── mel/                # Shared log-mel filterbank (FFT, windowing)
+│   ├── ortutil/            # ONNX Runtime bootstrap (lib path + idempotent init)
 │   └── server/
 │       ├── server.go       # HTTP server, route setup, lifecycle management
 │       ├── handlers.go     # API endpoint handlers, response formatting
+│       ├── merge.go        # Diarization + ASR word merge into speaker turns
 │       └── types.go        # Request/response type definitions
 ├── models/                 # ONNX models (downloaded separately, incl. silero_vad.onnx)
 ├── testdata/
@@ -103,7 +113,7 @@ parakeet/
 
 ### `main.go` (Entry Point)
 
-- Parses CLI flags: `-port`, `-models`, `-log-level`, `-log-format`, `-workers`, `-ffmpeg`, `-ffmpeg-path`, `-ffmpeg-timeout`, `-gpu`, `-gpu-device`, `-chunk-seconds`, `-chunk-overlap-seconds`, `-long-audio`, `-disable-vad-based-chunking`, `-disable-mel-based-chunking`, `-vad-model-path`
+- Parses CLI flags: `-port`, `-models`, `-log-level`, `-log-format`, `-workers`, `-ffmpeg`, `-ffmpeg-path`, `-ffmpeg-timeout`, `-gpu`, `-gpu-device`, `-chunk-seconds`, `-chunk-overlap-seconds`, `-long-audio`, `-disable-vad-based-chunking`, `-disable-mel-based-chunking`, `-vad-model-path`, `-enable-diarization`
 - Configures `slog` global logger (text or JSON handler, four log levels)
 - Runs server in background goroutine, listens for SIGINT/SIGTERM
 - Graceful shutdown: waits up to 30s for in-flight requests via `http.Server.Shutdown`
@@ -124,7 +134,8 @@ parakeet/
 
 #### `handlers.go`
 
-- `handleTranscription()` - Main endpoint, parses multipart form, returns transcription. Maps `asr.ErrUnsupportedAudio` to HTTP 400 `invalid_request_error`; other errors fall back to HTTP 500 `server_error`.
+- `handleTranscription()` - Main endpoint, parses multipart form, returns transcription. Maps `audio.ErrUnsupportedAudio` to HTTP 400 `invalid_request_error`; other errors fall back to HTTP 500 `server_error`.
+- `handleDiarizedTranscription()` - Diarization path (`diarize=true`): loads audio once, transcribes word timestamps, diarizes, and merges into speaker turns.
 - `handleTranslation()` - Delegates to transcription (Parakeet is English-focused)
 - `handleModels()` - Returns available models (parakeet-tdt-0.6b, whisper-1 alias)
 - `handleHealth()` - Health check endpoint
@@ -136,8 +147,15 @@ parakeet/
 - `TranscriptionResponse` - Simple JSON response with text
 - `VerboseTranscriptionResponse` - Detailed response with segments, timing
 - `Segment` - Transcription segment with timing info
+- `SpeakerTurn` - Speaker-attributed turn (`speaker`, `start`, `end`, `text`)
+- `DiarizedTranscriptionResponse` - Returned when `diarize=true`; `segments` = speaker turns
 - `ErrorResponse`, `ErrorDetail` - OpenAI-compatible error format
 - `ModelInfo`, `ModelsResponse` - Model listing types
+
+#### `merge.go`
+
+- `merge(words, activity, frameDuration)` - Attributes each word to the speaker with the highest summed activity over its span, grouping consecutive words into `SpeakerTurn`s.
+- `dominantSpeaker()` - Picks the speaker with the highest activity over a word's (padded) time span.
 
 ### `internal/asr/` (ASR Package)
 
@@ -145,21 +163,25 @@ parakeet/
 
 - `DebugMode` - Global flag for verbose logging
 - `Config` - Model configuration (features_size, subsampling_factor)
-- `Options` - Optional knobs passed to `NewTranscriber` (wraps `FFmpegConfig` and `GPUConfig`)
+- `Options` - Optional knobs passed to `NewTranscriber` (wraps `*audio.Converter` and `GPUConfig`)
 - `Provider` / `ProviderCPU` / `ProviderCUDA` - Execution-provider enum
 - `ParseProvider(s)` - Normalizes a user string to a `Provider`; empty -> CPU, unknown -> error (fail loud, no silent CPU fallback)
 - `GPUConfig` - `{Provider, DeviceID}` execution-provider selection
 - `buildSessionOptions(gpu)` - Returns `*ort.SessionOptions` for the provider; `(nil, nil)` for CPU (unchanged default path), a configured object for CUDA (sets `device_id`, `cudnn_conv_algo_search=HEURISTIC`, `arena_extend_strategy=kSameAsRequested`). The single place to add future EPs.
 - `provider(gpu)` - Returns the effective provider (empty -> CPU) for logging
-- `ErrUnsupportedAudio` - Sentinel error returned when input is neither WAV nor convertible. Used by the HTTP layer to map to 400.
 - `decoderWorker` - Holds a persistent decoder ONNX session with pre-allocated reusable tensors; `newDecoderWorker` takes the shared `*ort.SessionOptions`
-- `Transcriber` - Main inference struct holding a long-lived encoder `*ort.DynamicAdvancedSession`, a pool of `decoderWorker`s, and an optional `ffmpegConverter`
-- `NewTranscriber(modelsDir, workers, opts)` - Loads config, vocab, initializes ONNX Runtime, builds execution-provider session options (owned/destroyed once all sessions exist), creates the shared encoder session and decoder pool, and (optionally) probes ffmpeg
+- `Transcriber` - Main inference struct holding a long-lived encoder `*ort.DynamicAdvancedSession`, a pool of `decoderWorker`s, and an optional `*audio.Converter`
+- `NewTranscriber(modelsDir, workers, opts)` - Loads config, vocab, initializes ONNX Runtime, builds execution-provider session options, creates the shared encoder session and decoder pool
 - `Transcribe()` - Main entry: audio -> mel -> encoder -> TDT decode -> text
-- `loadAudio()` - Detects WAV by magic bytes (RIFF/WAVE); falls back to ffmpeg conversion when available, otherwise returns `ErrUnsupportedAudio`
 - `runInference()` - Runs the shared long-lived encoder session (variable-shape tensors supplied per `Run()`), then acquires a pool worker for decode
 - `tdtDecode()` - TDT greedy decoding loop reusing pooled session and tensors
 - `tokensToText()` - Token IDs to text with cleanup
+
+#### `words.go`
+
+- `Word{Text, Start, End}` - Word with timestamps in seconds.
+- `TranscribeWords()` / `TranscribeWordsSamples()` - Word-level timestamps (the latter from already-loaded samples).
+- `wordsFromTokens()` - Groups decoded tokens into words using the SentencePiece word-boundary marker (leading space).
 
 #### `chunker.go`, `boundary.go`, `vad.go`, `seam.go` (Long-Audio Chunking)
 
@@ -169,28 +191,29 @@ parakeet/
 - `sileroVAD` - Shared Silero VAD ONNX session; `vadState` carries per-request recurrent state + context so the session is safe to share (runs OUTSIDE the worker pool).
 - `dedupSeam` - Drops window i+1's leading tokens that collide (in absolute encoder-frame timestep) with window i's tail; the earlier window wins. Always on, no flag.
 
-#### `ffmpeg.go`
+#### `internal/audio`
 
-- `FFmpegConfig` - Public struct with `Enabled`, `BinaryPath`, `Timeout`
-- `ffmpegConverter` - Encapsulates an ffmpeg binary path and a conversion timeout; safe for concurrent use
-- `newFFmpegConverter()` - Probes the binary once with `exec.LookPath`; returns `nil` (logging a warning) when ffmpeg is disabled or missing
-- `Convert()` - Writes input to `os.CreateTemp` (unique path per call), runs `ffmpeg` via `exec.CommandContext` with captured stderr, reads the resulting WAV. Wraps non-zero exits and timeouts in `ErrUnsupportedAudio`.
+- `Load(data, converter)` - Decodes request bytes into mono 16 kHz float32 samples: WAV in-process, else ffmpeg fallback.
+- `ErrUnsupportedAudio` - Sentinel error mapped to HTTP 400.
+- `FFmpegConfig` / `Converter` / `NewConverter()` - Optional ffmpeg-backed conversion (concurrency-safe via per-call temp files).
 
-#### `mel.go`
+#### `internal/mel`
 
-- `MelFilterbank` - Mel-scale filterbank feature extractor
-- `NewMelFilterbank()` - Creates filterbank with NeMo defaults (128 mels, 512 FFT)
-- `Extract()` - Computes mel features with Hann windowing
-- `normalize()` - Per-utterance mean/variance normalization
-- `fft()` - Radix-2 Cooley-Tukey FFT implementation
-- Mel/Hz conversion helpers
+- `Filterbank` / `New()` - Shared log-mel filterbank (Hann window, FFT, mel filterbank, per-feature normalization). Used by both asr and diarization.
 
-#### `audio.go`
+#### `internal/ortutil`
 
-- `isWAV()` - Magic-byte check (RIFF/WAVE) used for content-based format detection
-- `parseWAV()` - WAV parser supporting multiple chunk layouts
-- `convertToFloat32()` - Supports 8/16/24/32-bit PCM and 32-bit float
-- `resample()` - Linear interpolation resampling to 16kHz
+- `ResolveLibPath()` - Locates the ONNX Runtime shared library.
+- `Init()` - Sets the library path and initializes the ORT environment once per process (idempotent); returns whether it owns the environment teardown.
+
+#### `internal/diarization`
+
+- `Diarizer` / `New()` / `Diarize()` - Nemotron-3-Diarization speaker diarization over samples.
+- `Activity()` - Per-frame speaker probabilities (sigmoid of the logits) at the mel frame rate; the merge uses this.
+- `FrameDuration()` - Duration of one activity frame in seconds.
+- `speakerCache` - AOSC/FIFO speaker cache (ported from Transformers).
+- `featureExtractor` - Pre-emphasis 0.97 + shared mel front-end.
+- `Segment{Start, End, Speaker}` - Speaker-tagged time span.
 
 ## API Endpoints
 
@@ -208,6 +231,7 @@ parakeet/
 - `language` - ISO-639-1 code (default: "en")
 - `response_format` - json, text, srt, vtt, verbose_json (default: "json")
 - `prompt`, `temperature` - Accepted but ignored
+- `diarize` - When `true`, returns speaker-attributed turns (`verbose_json`-style with a `speaker` field per segment); requires the server to be started with `-enable-diarization`
 
 ## Code Patterns & Conventions
 
@@ -245,11 +269,12 @@ parakeet/
 | `PARAKEET_GPU`        | Execution provider: `cpu` or `cuda`         | `cpu`                 |
 | `PARAKEET_GPU_DEVICE` | GPU device index for `cuda`                  | `0`                   |
 | `PARAKEET_LONG_AUDIO` | Split over-limit audio into overlapping chunks | `false`             |
-| `PARAKEET_CHUNK_SECONDS` | Sliding-window size in seconds (keep ≤20 for multilingual accuracy) | `20`                 |
-| `PARAKEET_CHUNK_OVERLAP_SECONDS` | Overlap between chunks in seconds | `3`                  |
+| `PARAKEET_CHUNK_SECONDS` | Sliding-window size in seconds | `60`                 |
+| `PARAKEET_CHUNK_OVERLAP_SECONDS` | Overlap between chunks in seconds | `15`                  |
 | `PARAKEET_DISABLE_VAD_BASED_CHUNKING` | Drop the Silero VAD boundary layer | `false`          |
 | `PARAKEET_DISABLE_MEL_BASED_CHUNKING` | Drop the mel-energy boundary layer | `false`          |
 | `PARAKEET_VAD_MODEL_PATH` | Path to silero_vad.onnx                  | `<models>/silero_vad.onnx` |
+| `PARAKEET_ENABLE_DIARIZATION` | Load the diarization model and allow `diarize=true` | `false`              |
 
 ## Dependencies
 
@@ -286,16 +311,17 @@ No other external Go dependencies. Standard library used for HTTP, JSON, audio p
 - Health check included
 - Exposed port: 5092
 - `Dockerfile.cuda`: NVIDIA CUDA base + GPU build of ONNX Runtime, fp32 models, linux/amd64 only. Run with `--gpus all` (nvidia-container-toolkit required).
+- The image bundles Parakeet + Silero VAD + Nemotron-3-Diarization via the Makefile recipes (`make MODELS_DIR=/models models-<precision>`). Diarization is gated at runtime by `PARAKEET_ENABLE_DIARIZATION=true` (or `-enable-diarization`).
 
 ## Common Tasks for Agents
 
 ### Adding a New Audio Format
 
-- If ffmpeg supports it (most common cases), no code change is needed: `loadAudio` automatically delegates any non-WAV input to the `ffmpegConverter`. Install `ffmpeg` on the target system and keep `-ffmpeg=true` (default).
+- If ffmpeg supports it (most common cases), no code change is needed: `audio.Load` automatically delegates any non-WAV input to the converter. Install `ffmpeg` on the target system and keep `-ffmpeg=true` (default).
 - To add a first-class (no-ffmpeg) parser:
-  1. Extend `isWAV`-style detection in `internal/asr/audio.go` with a new magic-byte helper.
+  1. Extend the magic-byte detection in `internal/audio/audio.go`.
   2. Implement a parser returning `[]float32` normalized to `[-1, 1]` at 16kHz mono.
-  3. Plug it into `Transcriber.loadAudio` before the ffmpeg fallback.
+  3. Plug it into `audio.Load` before the ffmpeg fallback.
 
 ### Adding a New Execution Provider (e.g. TensorRT, ROCm)
 
@@ -322,7 +348,7 @@ No other external Go dependencies. Standard library used for HTTP, JSON, audio p
 - Encoder dim: `internal/asr/transcriber.go:247` (`encoderDim := int64(1024)`)
 - LSTM state: `internal/asr/transcriber.go:314-315` (`stateDim`, `numLayers`)
 - Max tokens per step: `internal/asr/transcriber.go:39` (`maxTokensPerStep: 10`)
-- Mel features: `internal/asr/mel.go:25-27` (nFFT, hopLength, winLength)
+- Mel features: `internal/mel/mel.go` (`New(nMels, sampleRate, nFFT, hopLength, winLength)`)
 
 ### Adding a New Makefile Target
 
@@ -352,6 +378,7 @@ No other external Go dependencies. Standard library used for HTTP, JSON, audio p
 - `decoder_joint-model.int8.onnx` (~18MB) or `decoder_joint-model.onnx` (~72MB)
 - `config.json`, `vocab.txt`, `nemo128.onnx`
 - `silero_vad.onnx` (~2.3MB, snakers4/silero-vad v6.2.1, MIT) - used only for VAD-aware chunk boundaries in long-audio mode. Missing file is a graceful degrade (warns once, falls back to mel energy), not a fatal error.
+- `models/diarization/` - Nemotron-3-Diarization: `model_quantized.onnx` + `model_quantized.onnx_data` (int8, ~120MB) or `model.onnx` + `model.onnx_data` (fp32, ~400MB), plus `config.json`, `preprocessor_config.json`, `processor_config.json`. Download via `make models-diarization-int8` / `-fp32` (chained into `make models`).
 - Download via `make models` or manually from HuggingFace (Silero from its GitHub release)
 
 ### Chunk Boundary Selection (long-audio mode)

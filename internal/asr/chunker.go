@@ -16,18 +16,16 @@ const (
 	// DefaultChunkSeconds and DefaultChunkOverlapSeconds are the out-of-the-box
 	// window and overlap sizes when a caller leaves them unset.
 	//
-	// 20s is not arbitrary: parakeet-tdt-0.6b-v3's multilingual training
-	// utterances are capped at 20s (~250 encoder frames), so its relative
-	// positional attention only ever saw non-English speech inside that
-	// horizon. Windows longer than ~20s push attention distances into
-	// regions that were trained almost exclusively on English, and multilingual
-	// audio drifts into English (or AST translation) mode. NVIDIA's own
-	// long-form guidance restricts this model to a 256-frame (~20.5s)
-	// attention context for the same reason. The 3s overlap gives each window
-	// acoustic context and lets the decoder LSTM warm up before its owned
-	// region begins.
-	DefaultChunkSeconds        = 20
-	DefaultChunkOverlapSeconds = 3
+	// Long-audio chunking needs enough overlap for the encoder's acoustic
+	// context at each seam: with too small an overlap (e.g. 3s) the first words
+	// past every seam are lost, which compounds with the number of windows. 15s
+	// keeps each window's owned region transcribing cleanly. 60s of chunk keeps
+	// the window count low while staying well under the model's single-pass
+	// limit. The multilingual drift is handled by the NeMo-matching mel frontend
+	// (Slaney + pre-emphasis), not by shrinking the window below the training
+	// horizon.
+	DefaultChunkSeconds        = 60
+	DefaultChunkOverlapSeconds = 15
 
 	// modelMaxEncoderFrames is the longest encoder-frame sequence the exported
 	// ONNX model accepts: its positional-encoding table is [1, 9999, 1024],

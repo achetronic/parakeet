@@ -29,31 +29,26 @@ COPY . .
 # Build binary with CGO
 RUN go build -ldflags="-s -w" -o parakeet .
 
+# Models stage: downloads the models via the Makefile recipes so the runtime
+# stage only receives the model files (no make, curl or Makefile in the final
+# image).
+FROM debian:bookworm-slim AS models
+ARG MODEL_PRECISION=int8
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl make \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY Makefile /app/Makefile
+RUN make MODELS_DIR=/models models-${MODEL_PRECISION}
+
 # Runtime stage
 FROM debian:bookworm-slim
 
-# Model precision: "int8" (default, ~670MB) or "fp32" (~2.5GB)
-ARG MODEL_PRECISION=int8
-
-# Silero VAD model for chunk-boundary selection (long-audio mode). Pinned tag +
-# sha256 so the image build is reproducible and verified. snakers4/silero-vad is
-# MIT licensed. At v6.2.1 the ONNX file lives at src/silero_vad/data/.
-ARG SILERO_VAD_VERSION=v6.2.1
-ARG SILERO_VAD_SHA256=1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3
-
-# Install ONNX Runtime and ffmpeg (used for non-WAV audio conversion)
-ARG ONNXRUNTIME_VERSION=1.25.1
-ARG TARGETARCH
+# Install ffmpeg (used for non-WAV audio conversion). No curl here: the ONNX
+# Runtime library is copied from the builder stage.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
-    curl \
     ffmpeg \
-    && ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "aarch64" || echo "x64") \
-    && curl -L -o /tmp/onnxruntime.tgz \
-    "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-${ARCH}-${ONNXRUNTIME_VERSION}.tgz" \
-    && tar -xzf /tmp/onnxruntime.tgz -C /opt \
-    && mv /opt/onnxruntime-linux-${ARCH}-${ONNXRUNTIME_VERSION} /opt/onnxruntime \
-    && rm /tmp/onnxruntime.tgz \
     && rm -rf /var/lib/apt/lists/*
 
 # Set library path
@@ -62,29 +57,11 @@ ENV ONNXRUNTIME_LIB=/opt/onnxruntime/lib/libonnxruntime.so
 
 WORKDIR /app
 
-# Copy binary from builder
+# Copy the ONNX Runtime library (from the builder), the models (from the
+# models stage) and the binary.
+COPY --from=builder /opt/onnxruntime/lib /opt/onnxruntime/lib
+COPY --from=models /models /models
 COPY --from=builder /app/parakeet /app/parakeet
-
-# Download and embed models based on MODEL_PRECISION arg
-# int8: encoder-model.int8.onnx, decoder_joint-model.int8.onnx (~670MB total)
-# fp32: encoder-model.onnx, encoder-model.onnx.data, decoder_joint-model.onnx (~2.5GB total)
-RUN mkdir -p /models && \
-    curl -L -o /models/config.json "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/config.json" && \
-    curl -L -o /models/vocab.txt "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/vocab.txt" && \
-    curl -L -o /models/nemo128.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/nemo128.onnx" && \
-    curl -L -o /models/silero_vad.onnx "https://github.com/snakers4/silero-vad/raw/${SILERO_VAD_VERSION}/src/silero_vad/data/silero_vad.onnx" && \
-    echo "${SILERO_VAD_SHA256}  /models/silero_vad.onnx" | sha256sum -c - && \
-    if [ "$MODEL_PRECISION" = "fp32" ]; then \
-        curl -L -o /models/encoder-model.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/encoder-model.onnx" && \
-        curl -L -o /models/encoder-model.onnx.data "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/encoder-model.onnx.data" && \
-        curl -L -o /models/decoder_joint-model.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/decoder_joint-model.onnx"; \
-    else \
-        curl -L -o /models/encoder-model.int8.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/encoder-model.int8.onnx" && \
-        curl -L -o /models/decoder_joint-model.int8.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/decoder_joint-model.int8.onnx"; \
-    fi && \
-    apt-get remove -y curl && \
-    apt-get autoremove -y && \
-    rm -rf /var/lib/apt/lists/*
 
 # Expose port
 EXPOSE 5092

@@ -45,6 +45,7 @@ Key features:
 - Multilingual support (English and 25+ languages)
 - Quantized model support for reduced memory footprint
 - Automatic audio conversion for non-WAV formats (MP3, OGG, WebM, FLAC, M4A, AAC, Opus, ...) when ffmpeg is installed
+- Speaker diarization (opt-in): attribute each word to a speaker and return speaker-tagged turns
 
 ## Model Architecture
 
@@ -57,6 +58,10 @@ The architecture consists of:
 - **Vocabulary**: 8193 SentencePiece tokens including a blank token for CTC-style decoding.
 
 The int8 quantized models require approximately 670MB of disk space and 2GB of RAM during inference.
+
+### Speaker Diarization
+
+The server can optionally distinguish speakers using [NVIDIA Nemotron-3-Diarization](https://huggingface.co/nvidia/Nemotron-3-Diarization) (100M parameters, up to 8 speakers), running as a second ONNX model. Diarization is **disabled by default**; enable it with `-enable-diarization` (or `PARAKEET_ENABLE_DIARIZATION=true`) and request it per call with `diarize=true`. The model is bundled by `make models` and in the Docker images.
 
 ## Parakeet vs Whisper
 
@@ -219,6 +224,14 @@ docker run -d \
   --name parakeet \
   -p 5092:5092 \
   ghcr.io/achetronic/parakeet:latest
+
+# Speaker diarization is bundled in the image but disabled by default;
+# enable it per deployment:
+docker run -d \
+  --name parakeet \
+  -p 5092:5092 \
+  -e PARAKEET_ENABLE_DIARIZATION=true \
+  ghcr.io/achetronic/parakeet:latest
 ```
 
 #### Docker Compose
@@ -302,20 +315,19 @@ chunk_%03d.wav`) or use a CPU image, which is bounded by system RAM instead.
 | `-gpu`                        | Execution provider: `cpu` or `cuda`                                      | `cpu`                      | `-gpu cuda`                            |
 | `-gpu-device`                 | GPU device index for `cuda`                                              | `0`                        | `-gpu-device 1`                        |
 | `-long-audio`                 | Split audio over the model limit into chunks instead of rejecting it     | `false`                    | `-long-audio`                          |
-| `-chunk-seconds`              | Sliding-window size for long audio, in seconds (keep ≤20 for multilingual accuracy — see note below) | `20`                       | `-chunk-seconds 240`                   |
-| `-chunk-overlap-seconds`      | Overlap between consecutive chunks, in seconds                           | `3`                        | `-chunk-overlap-seconds 10`            |
+| `-chunk-seconds`              | Sliding-window size for long audio, in seconds     | `60`                       | `-chunk-seconds 120`                   |
+| `-chunk-overlap-seconds`      | Overlap between consecutive chunks, in seconds      | `15`                       | `-chunk-overlap-seconds 20`            |
 | `-disable-vad-based-chunking` | Disable the Silero VAD chunk-boundary layer (falls back to mel energy)   | `false`                    | `-disable-vad-based-chunking`          |
 | `-disable-mel-based-chunking` | Disable the mel-energy chunk-boundary layer (falls back to the midpoint) | `false`                    | `-disable-mel-based-chunking`          |
 | `-vad-model-path`             | Path to the Silero VAD ONNX model                                        | `<models>/silero_vad.onnx` | `-vad-model-path /opt/silero_vad.onnx` |
+| `-enable-diarization`         | Load the diarization model and allow `diarize=true`                      | `false`                    | `-enable-diarization`                  |
 
-> **Why the window defaults are small.** `parakeet-tdt-0.6b-v3`'s multilingual
-> training utterances are capped at about 20s (~250 encoder frames), so its
-> relative positional attention only ever saw non-English speech inside that
-> horizon. Raising `-chunk-seconds` far above 20 pushes attention distances into
-> regions trained almost exclusively on English, and non-English audio starts
-> drifting into English or machine-translation output. The defaults (20s window,
-> 3s overlap) keep multilingual transcripts inside the trained range; raise them
-> only if you are transcribing English and want fewer chunks.
+> **Why a 15s overlap.** Each window transcribes only its owned region; the
+> overlap gives the encoder acoustic context at the seam. Too small an overlap
+> (e.g. 3s) loses the first words past every seam, which compounds with the
+> number of windows. 15s keeps seams clean. The multilingual drift is handled
+> by the NeMo-matching mel frontend (Slaney + pre-emphasis), so the window does
+> not need to stay under the ~20s training horizon.
 
 **Examples:**
 
@@ -398,6 +410,18 @@ The following files are required in the models directory:
 
 For full precision models, use `encoder-model.onnx` (requires `encoder-model.onnx.data`, 2.5GB total) and `decoder_joint-model.onnx` (72MB).
 
+Speaker diarization (optional, only when `-enable-diarization` is set) needs a `diarization/` subdirectory with the Nemotron-3-Diarization model:
+
+| File (in `diarization/`)                | Size   | Description                     |
+| --------------------------------------- | ------ | ------------------------------- |
+| `model_quantized.onnx` + `.onnx_data`   | 120 MB | int8 diarization encoder        |
+| or `model.onnx` + `model.onnx_data`     | 400 MB | fp32 diarization encoder        |
+| `config.json`                           | 1.6 KB | Streaming / speaker-cache config |
+| `preprocessor_config.json`              | 339 B  | Feature extractor config        |
+| `processor_config.json`                 | 623 B  | Processor config                |
+
+Downloaded by `make models` (chained into `models-int8`/`models-fp32`).
+
 `silero_vad.onnx` ([snakers4/silero-vad](https://github.com/snakers4/silero-vad), MIT, pinned to release v6.2.1) is downloaded and checksum-verified by `make models`. It is only used to place chunk boundaries on silence in long-audio mode; if it is missing the server logs a warning once and falls back to mel-energy boundaries.
 
 ## API Reference
@@ -433,6 +457,7 @@ Content-Type: `multipart/form-data`
 | `stream`          | bool   | No       | When `true`, stream the transcription as Server-Sent Events (see Streaming below)      |
 | `prompt`          | string | No       | Accepted but ignored                                                                   |
 | `temperature`     | float  | No       | Accepted but ignored                                                                   |
+| `diarize`         | bool   | No       | When `true`, return speaker-attributed turns (requires `-enable-diarization`)          |
 
 **Response**
 
@@ -471,6 +496,30 @@ curl -X POST http://localhost:5092/v1/audio/transcriptions \
   -F file=@audio.wav \
   -F language=en \
   -F response_format=json
+```
+
+#### Speaker Diarization
+
+When the server runs with `-enable-diarization`, pass `diarize=true` to get speaker-attributed turns. Each turn carries a `speaker` index (in arrival order), its `start`/`end` times, and its `text`.
+
+```bash
+curl -X POST http://localhost:5092/v1/audio/transcriptions \
+  -H "Authorization: Bearer $PARAKEET_API_KEY" \
+  -F file=@meeting.wav \
+  -F diarize=true
+```
+
+```json
+{
+  "task": "transcribe",
+  "language": "en",
+  "duration": 59.2,
+  "text": "In this video, I'm gonna teach you...",
+  "segments": [
+    {"speaker": 0, "start": 0.56, "end": 14.80, "text": "In this video, I'm gonna teach you..."},
+    {"speaker": 1, "start": 15.68, "end": 29.68, "text": "Going along slushy country roads..."}
+  ]
+}
 ```
 
 #### Streaming

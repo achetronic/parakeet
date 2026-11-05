@@ -25,7 +25,7 @@ MODELS_DIR := ./models
 
 .PHONY: all build clean test fmt vet lint run help
 .PHONY: docker-build-int8 docker-build-fp32 docker-build-cuda docker-run-int8 docker-run-fp32 docker-run-cuda docker-push
-.PHONY: models models-int8 models-fp32 models-silero-vad
+.PHONY: models models-int8 models-fp32 models-silero-vad models-diarization-int8 models-diarization-fp32
 .PHONY: release release-linux release-darwin release-windows
 .PHONY: deps-onnxruntime
 
@@ -107,7 +107,7 @@ deps-onnxruntime: ## Install ONNX Runtime library
 	else echo "Unsupported architecture: $$ARCH"; exit 1; fi; \
 	curl -L -o /tmp/onnxruntime.tgz "https://github.com/microsoft/onnxruntime/releases/download/v$(ONNXRUNTIME_VERSION)/onnxruntime-linux-$$ARCH_NAME-$(ONNXRUNTIME_VERSION).tgz" && \
 	tar -xzf /tmp/onnxruntime.tgz -C /tmp && \
-	sudo cp /tmp/onnxruntime-linux-$$ARCH_NAME-$(ONNXRUNTIME_VERSION)/lib/* /usr/local/lib/ && \
+	sudo cp /tmp/onnxruntime-linux-$$ARCH_NAME-$(ONNXRUNTIME_VERSION)/lib/*.so* /usr/local/lib/ && \
 	sudo ldconfig && \
 	rm -rf /tmp/onnxruntime.tgz /tmp/onnxruntime-linux-$$ARCH_NAME-$(ONNXRUNTIME_VERSION) && \
 	echo "ONNX Runtime installed to /usr/local/lib/"
@@ -134,7 +134,7 @@ models-silero-vad: ## Download and verify the Silero VAD model (MIT)
 	@echo "$(SILERO_VAD_SHA256)  $(MODELS_DIR)/silero_vad.onnx" | sha256sum -c -
 	@echo "Silero VAD model verified"
 
-models-int8: models-silero-vad ## Download int8 quantized models (~670MB)
+models-int8: models-silero-vad models-diarization-int8 ## Download int8 quantized models (~670MB)
 	@mkdir -p $(MODELS_DIR)
 	@echo "Downloading Parakeet TDT int8 models from https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx ..."
 	@curl -L -o $(MODELS_DIR)/config.json "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/config.json"
@@ -144,7 +144,7 @@ models-int8: models-silero-vad ## Download int8 quantized models (~670MB)
 	@curl -L -o $(MODELS_DIR)/decoder_joint-model.int8.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/decoder_joint-model.int8.onnx"
 	@echo "Models downloaded to $(MODELS_DIR)"
 
-models-fp32: models-silero-vad ## Download fp32 full precision models (~2.5GB)
+models-fp32: models-silero-vad models-diarization-fp32 ## Download fp32 full precision models (~2.5GB)
 	@mkdir -p $(MODELS_DIR)
 	@echo "Downloading Parakeet TDT fp32 models from https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx ..."
 	@curl -L -o $(MODELS_DIR)/config.json "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/config.json"
@@ -154,6 +154,31 @@ models-fp32: models-silero-vad ## Download fp32 full precision models (~2.5GB)
 	@curl -L -o $(MODELS_DIR)/encoder-model.onnx.data "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/encoder-model.onnx.data"
 	@curl -L -o $(MODELS_DIR)/decoder_joint-model.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/decoder_joint-model.onnx"
 	@echo "Models downloaded to $(MODELS_DIR)"
+
+# .onnx + .onnx_data must stay together (external weights, relative path); subdir
+# avoids clobbering Parakeet's config.json at models/. Ref: https://huggingface.co/onnx-community/Nemotron-3-Diarization-ONNX
+DIARIZATION_REPO := onnx-community/Nemotron-3-Diarization-ONNX
+DIARIZATION_DIR := $(MODELS_DIR)/diarization
+
+models-diarization-int8: ## Download int8-quantized diarization model (~120MB)
+	@mkdir -p $(DIARIZATION_DIR)
+	@echo "Downloading Nemotron-3-Diarization int8 model from https://huggingface.co/$(DIARIZATION_REPO) ..."
+	@curl -L -o $(DIARIZATION_DIR)/config.json "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/config.json"
+	@curl -L -o $(DIARIZATION_DIR)/preprocessor_config.json "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/preprocessor_config.json"
+	@curl -L -o $(DIARIZATION_DIR)/processor_config.json "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/processor_config.json"
+	@curl -L -o $(DIARIZATION_DIR)/model_quantized.onnx "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/onnx/model_quantized.onnx"
+	@curl -L -o $(DIARIZATION_DIR)/model_quantized.onnx_data "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/onnx/model_quantized.onnx_data"
+	@echo "Diarization model downloaded to $(DIARIZATION_DIR)"
+
+models-diarization-fp32: ## Download fp32 diarization model (~400MB)
+	@mkdir -p $(DIARIZATION_DIR)
+	@echo "Downloading Nemotron-3-Diarization fp32 model from https://huggingface.co/$(DIARIZATION_REPO) ..."
+	@curl -L -o $(DIARIZATION_DIR)/config.json "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/config.json"
+	@curl -L -o $(DIARIZATION_DIR)/preprocessor_config.json "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/preprocessor_config.json"
+	@curl -L -o $(DIARIZATION_DIR)/processor_config.json "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/processor_config.json"
+	@curl -L -o $(DIARIZATION_DIR)/model.onnx "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/onnx/model.onnx"
+	@curl -L -o $(DIARIZATION_DIR)/model.onnx_data "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/onnx/model.onnx_data"
+	@echo "Diarization model downloaded to $(DIARIZATION_DIR)"
 
 ## Docker targets
 
@@ -232,6 +257,8 @@ help: ## Show this help message
 	@echo "  \033[36mmodels-int8\033[0m         Download int8 quantized models (~670MB)"
 	@echo "  \033[36mmodels-fp32\033[0m         Download fp32 full precision models (~2.5GB)"
 	@echo "  \033[36mmodels-silero-vad\033[0m   Download and verify the Silero VAD model (MIT)"
+	@echo "  \033[36mmodels-diarization-int8\033[0m   Download int8 diarization model (~120MB)"
+	@echo "  \033[36mmodels-diarization-fp32\033[0m   Download fp32 diarization model (~400MB)"
 	@echo ""
 	@echo "\033[1mDocker:\033[0m"
 	@echo "  \033[36mdocker-build-int8\033[0m   Build Docker image with int8 models"

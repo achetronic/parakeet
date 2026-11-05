@@ -17,6 +17,23 @@ type VerboseTranscriptionResponse struct {
 	Segments []Segment `json:"segments,omitempty"`
 }
 
+// SpeakerTurn is a speaker-attributed transcription segment.
+type SpeakerTurn struct {
+	Speaker int     `json:"speaker"`
+	Start   float64 `json:"start"`
+	End     float64 `json:"end"`
+	Text    string  `json:"text"`
+}
+
+// DiarizedTranscriptionResponse is returned when diarize=true.
+type DiarizedTranscriptionResponse struct {
+	Task     string        `json:"task"`
+	Language string        `json:"language"`
+	Duration float64       `json:"duration"`
+	Text     string        `json:"text"`
+	Segments []SpeakerTurn `json:"segments"`
+}
+
 // Segment represents a transcription segment with timing information
 type Segment struct {
 	ID               int     `json:"id"`
