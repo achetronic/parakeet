@@ -28,13 +28,16 @@ type Filterbank struct {
 	hopLength   int
 	winLength   int
 	preEmphasis float64
+	normalize   bool
 	filterbank  [][]float64 // [nMels][nFFT/2+1] continuous Slaney weights
 	window      []float64   // length nFFT: Hann(winLength) zero-padded to centre
 }
 
 // New creates a mel filterbank extractor. preEmphasis is the pre-emphasis
-// coefficient (0.97 for NeMo/Nemotron; 0 disables it).
-func New(nMels, sampleRate, nFFT, hopLength, winLength int, preEmphasis float64) *Filterbank {
+// coefficient (0.97 for NeMo/Nemotron; 0 disables it). normalize enables the
+// per-feature mean/std (N-1) normalization: NeMo ASR wants it, but the
+// Nemotron-3 diarization frontend never normalizes the mel features.
+func New(nMels, sampleRate, nFFT, hopLength, winLength int, preEmphasis float64, normalize bool) *Filterbank {
 	f := &Filterbank{
 		nMels:       nMels,
 		sampleRate:  sampleRate,
@@ -42,6 +45,7 @@ func New(nMels, sampleRate, nFFT, hopLength, winLength int, preEmphasis float64)
 		hopLength:   hopLength,
 		winLength:   winLength,
 		preEmphasis: preEmphasis,
+		normalize:   normalize,
 	}
 	f.filterbank = f.createMelFilterbank()
 	f.window = f.createWindow()
@@ -188,8 +192,10 @@ func (f *Filterbank) Extract(samples []float32) [][]float32 {
 		features[frame] = melEnergies
 	}
 
-	// 3. Per-feature normalisation over the whole utterance.
-	normalize(features)
+	// 3. Per-feature normalisation over the whole utterance (NeMo ASR only).
+	if f.normalize {
+		normalize(features)
+	}
 	return features
 }
 

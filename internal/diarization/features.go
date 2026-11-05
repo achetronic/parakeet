@@ -14,7 +14,7 @@ type featureExtractor struct {
 
 func newFeatureExtractor(cfg Config) *featureExtractor {
 	return &featureExtractor{
-		fb: mel.New(cfg.FeatureSize, cfg.SampleRate, cfg.NFFT, cfg.HopLength, cfg.WinLength, cfg.Preemphasis),
+		fb: mel.New(cfg.FeatureSize, cfg.SampleRate, cfg.NFFT, cfg.HopLength, cfg.WinLength, cfg.Preemphasis, false),
 	}
 }
 

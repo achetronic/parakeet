@@ -81,7 +81,7 @@ func TestWordsFromTokens(t *testing.T) {
 			tr := &Transcriber{
 				vocab:  tt.vocab,
 				config: Config{SubsamplingFactor: 8},
-				mel:    mel.New(128, 16000, 512, 160, 400, 0.97),
+				mel:    mel.New(128, 16000, 512, 160, 400, 0.97, true),
 			}
 			got := tr.wordsFromTokens(tt.toks)
 			if len(got) != len(tt.want) {

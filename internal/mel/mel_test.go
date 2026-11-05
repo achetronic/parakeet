@@ -26,7 +26,7 @@ func nemoTestSignal() []float32 {
 // TestMelMatchesNemoGolden pins the extractor against values produced by
 // onnx-asr's NemoPreprocessorNumpy (itself matching nemo128.onnx to ~7e-5).
 func TestMelMatchesNemoGolden(t *testing.T) {
-	m := New(128, 16000, 512, 160, 400, 0.97)
+	m := New(128, 16000, 512, 160, 400, 0.97, true)
 	features := m.Extract(nemoTestSignal())
 
 	if len(features) != 100 {
@@ -62,7 +62,7 @@ func TestMelMatchesNemoGolden(t *testing.T) {
 }
 
 func TestMelNormalization(t *testing.T) {
-	m := New(128, 16000, 512, 160, 400, 0.97)
+	m := New(128, 16000, 512, 160, 400, 0.97, true)
 	features := m.Extract(nemoTestSignal())
 
 	n := float64(len(features))
@@ -88,7 +88,7 @@ func TestMelNormalization(t *testing.T) {
 }
 
 func TestMelFrameCount(t *testing.T) {
-	m := New(128, 16000, 512, 160, 400, 0.97)
+	m := New(128, 16000, 512, 160, 400, 0.97, true)
 	cases := []struct {
 		samples int
 		want    int
