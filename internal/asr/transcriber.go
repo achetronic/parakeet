@@ -318,7 +318,7 @@ func NewTranscriber(modelsDir string, workers int, opts Options) (*Transcriber, 
 	}
 
 	// Initialize mel filterbank
-	t.mel = mel.New(t.config.FeaturesSize, 16000, 512, 160, 400, 0.97, true) // NeMo preprocessor: 512 FFT, 10 ms hop, 25 ms window, 0.97 pre-emphasis, normalize
+	t.mel = mel.New(t.config.FeaturesSize, 16000, 512, 160, 400, 0.97, false) // NeMo preprocessor: 512 FFT, 10 ms hop, 25 ms window, 0.97 pre-emphasis. Normalisation is applied per window (see transcribeSamples), not over the whole utterance.
 
 	// Resolve chunk sizes (seconds to mel frames) and reject anything that
 	// would overrun the model's frame limit.
@@ -615,7 +615,20 @@ func (t *Transcriber) transcribeSamples(ctx context.Context, waveform []float32,
 			}
 		}
 
-		windowTokens, err := t.runInference(ctx, features[win.start:win.end], emitStart, emitEnd, frameOffset, holdFirst, resolveSeam, emit)
+		// Per-window feature normalisation. NeMo normalises per-feature over one
+		// utterance, but long audio is chunked into 60s windows; normalising the
+		// whole (possibly hours-long) file at once pushes the statistics far from
+		// the ~utterance-length distribution the encoder saw in training, which
+		// makes it silently drop whole utterances in the middle of a window. Each
+		// window is therefore normalised over its own frames only. For short
+		// (single-window) audio this is identical to the old global normalisation.
+		windowFeatures := make([][]float32, win.end-win.start)
+		for j := win.start; j < win.end; j++ {
+			windowFeatures[j-win.start] = append([]float32(nil), features[j]...)
+		}
+		mel.Normalize(windowFeatures)
+
+		windowTokens, err := t.runInference(ctx, windowFeatures, emitStart, emitEnd, frameOffset, holdFirst, resolveSeam, emit)
 		if err != nil {
 			return nil, fmt.Errorf("inference failed: %w", err)
 		}

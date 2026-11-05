@@ -192,17 +192,24 @@ func (f *Filterbank) Extract(samples []float32) [][]float32 {
 		features[frame] = melEnergies
 	}
 
-	// 3. Per-feature normalisation over the whole utterance (NeMo ASR only).
+	// 3. Per-feature normalisation over all frames ever passed to Extract.
+	// Callers that slice a long utterance into windows normalise each window
+	// with Normalize instead of letting Extract normalise the whole thing, so
+	// this flag is used for the single-pass case only.
 	if f.normalize {
-		normalize(features)
+		Normalize(features)
 	}
 	return features
 }
 
-// normalize standardises each mel bin across frames with the sample variance
+// Normalize standardises each mel bin across frames with the sample variance
 // (N-1) and adds stdEpsilon to the denominator, matching NeMo's
-// normalize="per_feature".
-func normalize(features [][]float32) {
+// normalize="per_feature". It operates on the frames it is given, so callers
+// (e.g. long-audio chunking) can normalise a single window in isolation; the
+// whole-utterance statistics of a hours-long file lie far from the
+// ~utterance-length distribution the encoder was trained on and make it drop
+// whole utterances mid-window.
+func Normalize(features [][]float32) {
 	if len(features) < 2 {
 		return
 	}
