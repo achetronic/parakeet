@@ -198,8 +198,8 @@ func TestSeamEval(t *testing.T) {
 	refNear := 0
 	refFar := 0
 	type deletion struct {
-		text                        string
-		t, dSeam, dClip             float64
+		text            string
+		t, dSeam, dClip float64
 	}
 	var deletions []deletion
 
