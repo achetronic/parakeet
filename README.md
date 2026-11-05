@@ -21,6 +21,8 @@
 - [Configuration](#configuration)
   - [Command Line Flags](#command-line-flags)
   - [Environment Variables](#environment-variables)
+  - [Long Audio](#long-audio)
+  - [Speaker Diarization](#speaker-diarization)
   - [Model Files](#model-files)
 - [API Reference](#api-reference)
   - [Transcribe Audio](#transcribe-audio)
@@ -60,10 +62,6 @@ The architecture consists of:
 - **Vocabulary**: 8193 SentencePiece tokens including a blank token for CTC-style decoding.
 
 The int8 quantized models require approximately 670MB of disk space and 2GB of RAM during inference.
-
-### Speaker Diarization
-
-The server can optionally distinguish speakers using [NVIDIA Nemotron-3-Diarization](https://huggingface.co/nvidia/Nemotron-3-Diarization) (100M parameters, up to 8 speakers), running as a second ONNX model. Diarization is **disabled by default**; enable it with `-enable-diarization` (or `PARAKEET_ENABLE_DIARIZATION=true`) and request it per call with `diarize=true`. The model is bundled by `make models` and in the Docker images.
 
 ## Parakeet vs Whisper
 
@@ -324,13 +322,6 @@ chunk_%03d.wav`) or use a CPU image, which is bounded by system RAM instead.
 | `-vad-model-path`             | Path to the Silero VAD ONNX model                                        | `<models>/silero_vad.onnx` | `-vad-model-path /opt/silero_vad.onnx` |
 | `-enable-diarization`         | Load the diarization model and allow `diarize=true`                      | `false`                    | `-enable-diarization`                  |
 
-> **Why a 15s overlap.** Each window transcribes only its owned region; the
-> overlap gives the encoder acoustic context at the seam. Too small an overlap
-> (e.g. 3s) loses the first words past every seam, which compounds with the
-> number of windows. 15s keeps seams clean. The multilingual drift is handled
-> by the NeMo-matching mel frontend (Slaney + pre-emphasis), so the window does
-> not need to stay under the ~20s training horizon.
-
 **Examples:**
 
 ```bash
@@ -352,6 +343,25 @@ chunk_%03d.wav`) or use a CPU image, which is bounded by system RAM instead.
 # Suppress ONNX Runtime schema warnings (stderr) while keeping debug logs
 ./parakeet -log-level debug 2>&1 | grep -v "Schema error"
 ```
+
+### Environment Variables
+
+Every command-line flag also reads from an environment variable: take the flag
+name, uppercase it and replace dashes with underscores, then prefix it with
+`PARAKEET_`. So `-log-level` maps to `PARAKEET_LOG_LEVEL`, `-ffmpeg-timeout` to
+`PARAKEET_FFMPEG_TIMEOUT`, and so on. An explicit flag always overrides its env
+var (precedence: **CLI flag > env var > default**); an invalid env value is
+ignored with a warning and the default is kept.
+
+The Docker images bake their operational defaults as `PARAKEET_*` env vars, so
+they survive when you pass your own flags.
+
+A few variables have no flag equivalent:
+
+| Variable           | Description                                 | Default               |
+| ------------------ | ------------------------------------------- | --------------------- |
+| `ONNXRUNTIME_LIB`  | Path to libonnxruntime.so                   | Auto-detected         |
+| `PARAKEET_API_KEY` | API key for `/v1/*` endpoint authentication | Empty (auth disabled) |
 
 ### Long Audio
 
@@ -378,24 +388,9 @@ A second, always-on safety net removes any duplicate or colliding tokens right
 at each seam. You can turn off individual layers with
 `-disable-vad-based-chunking` / `-disable-mel-based-chunking`.
 
-### Environment Variables
+### Speaker Diarization
 
-Every command-line flag also reads from an environment variable: take the flag
-name, uppercase it and replace dashes with underscores, then prefix it with
-`PARAKEET_`. So `-log-level` maps to `PARAKEET_LOG_LEVEL`, `-ffmpeg-timeout` to
-`PARAKEET_FFMPEG_TIMEOUT`, and so on. An explicit flag always overrides its env
-var (precedence: **CLI flag > env var > default**); an invalid env value is
-ignored with a warning and the default is kept.
-
-The Docker images bake their operational defaults as `PARAKEET_*` env vars, so
-they survive when you pass your own flags.
-
-A few variables have no flag equivalent:
-
-| Variable           | Description                                 | Default               |
-| ------------------ | ------------------------------------------- | --------------------- |
-| `ONNXRUNTIME_LIB`  | Path to libonnxruntime.so                   | Auto-detected         |
-| `PARAKEET_API_KEY` | API key for `/v1/*` endpoint authentication | Empty (auth disabled) |
+The server can optionally distinguish speakers using [NVIDIA Nemotron-3-Diarization](https://huggingface.co/nvidia/Nemotron-3-Diarization) (100M parameters, up to 8 speakers), running as a second ONNX model. Diarization is **disabled by default**; enable it with `-enable-diarization` (or `PARAKEET_ENABLE_DIARIZATION=true`) and request it per call with `diarize=true`. The model is bundled by `make models` and in the Docker images.
 
 ### Model Files
 
