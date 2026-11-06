@@ -116,7 +116,7 @@ parakeet/
 
 ### `main.go` (Entry Point)
 
-- Parses CLI flags: `-port`, `-models`, `-log-level`, `-log-format`, `-workers`, `-ffmpeg`, `-ffmpeg-path`, `-ffmpeg-timeout`, `-gpu`, `-gpu-device`, `-chunk-seconds`, `-chunk-overlap-seconds`, `-long-audio`, `-disable-vad-based-chunking`, `-disable-mel-based-chunking`, `-vad-model-path`, `-enable-diarization`
+- Parses CLI flags: `-port`, `-models`, `-log-level`, `-log-format`, `-workers`, `-ffmpeg`, `-ffmpeg-path`, `-ffmpeg-timeout`, `-gpu`, `-gpu-devices`, `-chunk-seconds`, `-chunk-overlap-seconds`, `-long-audio`, `-disable-vad-based-chunking`, `-disable-mel-based-chunking`, `-vad-model-path`, `-enable-diarization`
 - Configures `slog` global logger (text or JSON handler, four log levels)
 - Runs server in background goroutine, listens for SIGINT/SIGTERM
 - Graceful shutdown: waits up to 30s for in-flight requests via `http.Server.Shutdown`
@@ -127,7 +127,7 @@ parakeet/
 
 #### `server.go`
 
-- `Config` struct: Port, ModelsDir, LogLevel, LogFormat, Workers, FFmpegEnabled, FFmpegPath, FFmpegTimeout, GPUProvider, GPUDeviceID, ChunkSeconds, ChunkOverlapSeconds, LongAudio, DisableVADBasedChunking, DisableMelBasedChunking, VADModelPath
+- `Config` struct: Port, ModelsDir, LogLevel, LogFormat, Workers, FFmpegEnabled, FFmpegPath, FFmpegTimeout, GPUProvider, GPUDevices, ChunkSeconds, ChunkOverlapSeconds, LongAudio, DisableVADBasedChunking, DisableMelBasedChunking, VADModelPath
 - `Server` struct: wraps config, transcriber, `http.Server`, HTTP mux, and API key
 - `New()` - Parses the GPU provider via `asr.ParseProvider` (fails fast on unknown values), initializes transcriber with worker pool, execution provider, and optional ffmpeg converter, reads `PARAKEET_API_KEY` env var, and sets up routes
 - `Run()` - Starts HTTP listener (blocks until shutdown or error)
@@ -169,12 +169,12 @@ parakeet/
 - `Options` - Optional knobs passed to `NewTranscriber` (wraps `*audio.Converter` and `GPUConfig`)
 - `Provider` / `ProviderCPU` / `ProviderCUDA` - Execution-provider enum
 - `ParseProvider(s)` - Normalizes a user string to a `Provider`; empty -> CPU, unknown -> error (fail loud, no silent CPU fallback)
-- `GPUConfig` - `{Provider, DeviceID}` execution-provider selection
-- `buildSessionOptions(gpu)` - Returns `*ort.SessionOptions` for the provider; `(nil, nil)` for CPU (unchanged default path), a configured object for CUDA (sets `device_id`, `cudnn_conv_algo_search=HEURISTIC`, `arena_extend_strategy=kSameAsRequested`). The single place to add future EPs.
+- `GPUConfig` - `{Provider, Devices}` execution-provider selection; `Devices` is ignored on CPU
+- `buildSessionOptionsForDevice(provider, deviceID)` - Returns `*ort.SessionOptions` for one device; `nil` for CPU (unchanged default path), a configured object for CUDA (sets `device_id`, `cudnn_conv_algo_search=HEURISTIC`, `arena_extend_strategy=kSameAsRequested`). The single place to add future EPs.
 - `provider(gpu)` - Returns the effective provider (empty -> CPU) for logging
-- `decoderWorker` - Holds a persistent decoder ONNX session with pre-allocated reusable tensors; `newDecoderWorker` takes the shared `*ort.SessionOptions`
-- `Transcriber` - Main inference struct holding a long-lived encoder `*ort.DynamicAdvancedSession`, a pool of `decoderWorker`s, and an optional `*audio.Converter`
-- `NewTranscriber(modelsDir, workers, opts)` - Loads config, vocab, initializes ONNX Runtime, builds execution-provider session options, creates the shared encoder session and decoder pool
+- `decoderWorker` - One concurrent transcription slot: a decoder session with reusable tensors, plus a private encoder session on GPU (`nil` on CPU); `newDecoderWorker` takes the device `*ort.SessionOptions`
+- `Transcriber` - Main inference struct holding the worker pool (the single concurrency gate), the shared CPU encoder (`t.encoder`, nil on GPU), and an optional `*audio.Converter`
+- `NewTranscriber(modelsDir, workers, opts)` - Loads config and vocab, initializes ONNX Runtime, and builds the worker pool: on CPU one shared encoder plus a decoder per worker; on GPU an encoder+decoder pair per worker pinned round-robin over `Devices`
 - `Transcribe()` - Main entry: audio -> mel -> encoder -> TDT decode -> text. Returns just the text.
 - `TranscribeDetailed()` - Same single pass, returns `Result{Text, Duration, Segments}`. Used by the HTTP handler.
 - `TranscribeStream()` - Same pass with an `emit` callback for SSE deltas. Returns just the text.
@@ -286,7 +286,7 @@ parakeet/
 | `ONNXRUNTIME_LIB`     | Path to libonnxruntime.so                   | Auto-detect           |
 | `PARAKEET_API_KEY`    | API key for `/v1/*` endpoint authentication | Empty (auth disabled) |
 | `PARAKEET_GPU`        | Execution provider: `cpu` or `cuda`         | `cpu`                 |
-| `PARAKEET_GPU_DEVICE` | GPU device index for `cuda`                  | `0`                   |
+| `PARAKEET_GPU_DEVICES` | Comma-separated CUDA device ids to spread workers over | `0`    |
 | `PARAKEET_LONG_AUDIO` | Split over-limit audio into overlapping chunks | `false`             |
 | `PARAKEET_CHUNK_SECONDS` | Sliding-window size in seconds | `60`                 |
 | `PARAKEET_CHUNK_OVERLAP_SECONDS` | Overlap between chunks in seconds | `15`                  |

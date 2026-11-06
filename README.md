@@ -273,30 +273,29 @@ docker run -d \
   ghcr.io/achetronic/parakeet:latest-cuda
 ```
 
-The CUDA image enables the GPU by default (`-gpu cuda`). For a non-Docker
-binary, or to select a specific device, use the `-gpu`/`-gpu-device` flags or
-the `PARAKEET_GPU`/`PARAKEET_GPU_DEVICE` environment variables:
+The CUDA image runs on the GPU out of the box. To pick which GPUs (or MIG
+slices) to use, list their ids; workers spread across them:
 
 ```bash
-./parakeet -gpu cuda -gpu-device 0
-# or, equivalently, via environment:
-PARAKEET_GPU=cuda PARAKEET_GPU_DEVICE=0 ./parakeet
+./parakeet -gpu cuda -gpu-devices 0,1,2
 ```
 
-If the requested provider cannot be initialized (missing CUDA libraries, driver
-or version mismatch), the server fails at startup rather than silently falling
-back to CPU, so misconfiguration is visible immediately.
+Same via env: `PARAKEET_GPU=cuda` and `PARAKEET_GPU_DEVICES=0,1,2`.
+
+If the GPU can't be used (missing CUDA, wrong driver), the server refuses to
+start instead of silently falling back to CPU.
 
 > [!NOTE]
 > fp32 is the GPU-appropriate precision and is the default for the CUDA image.
 > CPU images and CPU mode are unaffected by these flags.
 
-**Memory and audio length.** The encoder processes the whole file in a single
-pass, so peak memory scales with audio duration. On GPU this is bounded by VRAM:
-very long inputs (roughly an hour or more on a 24 GB card) can exceed device
-memory and fail with an ONNX Runtime allocation error. Segment long audio (for
-example with `ffmpeg -i in.wav -f segment -segment_time 300 -ar 16000 -ac 1
-chunk_%03d.wav`) or use a CPU image, which is bounded by system RAM instead.
+**Memory.** Two things decide how much VRAM you use:
+
+- **Audio length.** Files of an hour or more can exceed the card and fail to
+  allocate. Chunk them (ffmpeg `-f segment`) or use the CPU image.
+- **`-workers`.** Each concurrent worker keeps its own model in VRAM: ~670 MB
+  (int8) or ~2.5 GB (fp32). Set it to what your card, or your `-gpu-devices`
+  slices, actually hold.
 
 ## Configuration
 
@@ -308,15 +307,15 @@ chunk_%03d.wav`) or use a CPU image, which is bounded by system RAM instead.
 | `-models`                     | Path to models directory                                                 | `./models`                 | `-models /opt/parakeet/models`         |
 | `-log-level`                  | Log level: debug, info, warn, error                                      | `info`                     | `-log-level debug`                     |
 | `-log-format`                 | Log output format: text or json                                          | `text`                     | `-log-format json`                     |
-| `-workers`                    | Concurrent inference workers (each ~670MB RAM for int8)                  | `4`                        | `-workers 2`                           |
+| `-workers`                    | Concurrent transcriptions (each ~670MB RAM/VRAM for int8)                | `4`                        | `-workers 2`                           |
 | `-ffmpeg`                     | Enable ffmpeg fallback for non-WAV audio                                 | `true`                     | `-ffmpeg=false`                        |
 | `-ffmpeg-path`                | Path to the ffmpeg binary (empty = resolve from `PATH`)                  | ``                         | `-ffmpeg-path /usr/bin/ffmpeg`         |
 | `-ffmpeg-timeout`             | Maximum wall-clock time for a single ffmpeg conversion                   | `60s`                      | `-ffmpeg-timeout 30s`                  |
 | `-gpu`                        | Execution provider: `cpu` or `cuda`                                      | `cpu`                      | `-gpu cuda`                            |
-| `-gpu-device`                 | GPU device index for `cuda`                                              | `0`                        | `-gpu-device 1`                        |
+| `-gpu-devices`                | Comma-separated CUDA device ids to spread workers over                   | `0`                        | `-gpu-devices 0,1,2`                   |
 | `-long-audio`                 | Split audio over the model limit into chunks instead of rejecting it     | `false`                    | `-long-audio`                          |
-| `-chunk-seconds`              | Sliding-window size for long audio, in seconds     | `60`                       | `-chunk-seconds 120`                   |
-| `-chunk-overlap-seconds`      | Overlap between consecutive chunks, in seconds      | `15`                       | `-chunk-overlap-seconds 20`            |
+| `-chunk-seconds`              | Sliding-window size for long audio, in seconds                           | `60`                       | `-chunk-seconds 120`                   |
+| `-chunk-overlap-seconds`      | Overlap between consecutive chunks, in seconds                           | `15`                       | `-chunk-overlap-seconds 20`            |
 | `-disable-vad-based-chunking` | Disable the Silero VAD chunk-boundary layer (falls back to mel energy)   | `false`                    | `-disable-vad-based-chunking`          |
 | `-disable-mel-based-chunking` | Disable the mel-energy chunk-boundary layer (falls back to the midpoint) | `false`                    | `-disable-mel-based-chunking`          |
 | `-vad-model-path`             | Path to the Silero VAD ONNX model                                        | `<models>/silero_vad.onnx` | `-vad-model-path /opt/silero_vad.onnx` |
@@ -409,13 +408,13 @@ For full precision models, use `encoder-model.onnx` (requires `encoder-model.onn
 
 Speaker diarization (optional, only when `-enable-diarization` is set) needs a `diarization/` subdirectory with the Nemotron-3-Diarization model:
 
-| File (in `diarization/`)                | Size   | Description                     |
-| --------------------------------------- | ------ | ------------------------------- |
-| `model_quantized.onnx` + `.onnx_data`   | 120 MB | int8 diarization encoder        |
-| or `model.onnx` + `model.onnx_data`     | 400 MB | fp32 diarization encoder        |
-| `config.json`                           | 1.6 KB | Streaming / speaker-cache config |
-| `preprocessor_config.json`              | 339 B  | Feature extractor config        |
-| `processor_config.json`                 | 623 B  | Processor config                |
+| File (in `diarization/`)              | Size   | Description                      |
+| ------------------------------------- | ------ | -------------------------------- |
+| `model_quantized.onnx` + `.onnx_data` | 120 MB | int8 diarization encoder         |
+| or `model.onnx` + `model.onnx_data`   | 400 MB | fp32 diarization encoder         |
+| `config.json`                         | 1.6 KB | Streaming / speaker-cache config |
+| `preprocessor_config.json`            | 339 B  | Feature extractor config         |
+| `processor_config.json`               | 623 B  | Processor config                 |
 
 Downloaded by `make models` (chained into `models-int8`/`models-fp32`).
 
@@ -445,16 +444,16 @@ Transcribes audio into text. Compatible with OpenAI's Whisper API.
 
 Content-Type: `multipart/form-data`
 
-| Parameter         | Type   | Required | Description                                                                            |
-| ----------------- | ------ | -------- | -------------------------------------------------------------------------------------- |
-| `file`            | file   | Yes      | Audio file (WAV always supported; MP3/OGG/WebM/FLAC/M4A/AAC/Opus via ffmpeg, max 25MB) |
-| `model`           | string | No       | Model name (accepted but ignored)                                                      |
-| `language`        | string | No       | ISO-639-1 language code (default: en)                                                  |
+| Parameter         | Type   | Required | Description                                                                                  |
+| ----------------- | ------ | -------- | -------------------------------------------------------------------------------------------- |
+| `file`            | file   | Yes      | Audio file (WAV always supported; MP3/OGG/WebM/FLAC/M4A/AAC/Opus via ffmpeg, max 25MB)       |
+| `model`           | string | No       | Model name (accepted but ignored)                                                            |
+| `language`        | string | No       | ISO-639-1 language code (default: en)                                                        |
 | `response_format` | string | No       | Output format: json, text, srt, vtt, verbose_json (the last three carry per-segment timings) |
-| `stream`          | bool   | No       | When `true`, stream the transcription as Server-Sent Events (see Streaming below)      |
-| `prompt`          | string | No       | Accepted but ignored                                                                   |
-| `temperature`     | float  | No       | Accepted but ignored                                                                   |
-| `diarize`         | bool   | No       | When `true`, return speaker-attributed turns (requires `-enable-diarization`)          |
+| `stream`          | bool   | No       | When `true`, stream the transcription as Server-Sent Events (see Streaming below)            |
+| `prompt`          | string | No       | Accepted but ignored                                                                         |
+| `temperature`     | float  | No       | Accepted but ignored                                                                         |
+| `diarize`         | bool   | No       | When `true`, return speaker-attributed turns (requires `-enable-diarization`)                |
 
 **Response**
 
@@ -517,8 +516,8 @@ per second, 0.08 s each).
 
 What each field means:
 
-| Field               | Meaning                                                                     |
-| ------------------- | --------------------------------------------------------------------------- |
+| Field               | Meaning                                                                      |
+| ------------------- | ---------------------------------------------------------------------------- |
 | `duration`          | Audio length measured from the decoded waveform, not from the uploaded bytes |
 | `start` / `end`     | Segment bounds in seconds, `end` clamped to `duration`                       |
 | `seek`              | Segment start in milliseconds, matching OpenAI's field                       |
@@ -559,8 +558,18 @@ curl -X POST http://localhost:5092/v1/audio/transcriptions \
   "duration": 59.2,
   "text": "In this video, I'm gonna teach you...",
   "segments": [
-    {"speaker": 0, "start": 0.56, "end": 14.80, "text": "In this video, I'm gonna teach you..."},
-    {"speaker": 1, "start": 15.68, "end": 29.68, "text": "Going along slushy country roads..."}
+    {
+      "speaker": 0,
+      "start": 0.56,
+      "end": 14.8,
+      "text": "In this video, I'm gonna teach you..."
+    },
+    {
+      "speaker": 1,
+      "start": 15.68,
+      "end": 29.68,
+      "text": "Going along slushy country roads..."
+    }
   ]
 }
 ```
