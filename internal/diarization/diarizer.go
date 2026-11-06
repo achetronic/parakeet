@@ -26,11 +26,13 @@ type Diarizer struct {
 	cfg     Config
 	fe      *featureExtractor
 	sess    *ort.DynamicAdvancedSession
+	sem     chan struct{}
 	envInit bool
 }
 
 // New loads the diarization model from modelsDir and creates a Diarizer.
-func New(modelsDir string) (*Diarizer, error) {
+// workers bounds how many diarization runs may execute at once.
+func New(modelsDir string, workers int) (*Diarizer, error) {
 	cfg, err := loadConfig(modelsDir)
 	if err != nil {
 		return nil, err
@@ -56,7 +58,16 @@ func New(modelsDir string) (*Diarizer, error) {
 		return nil, err
 	}
 
-	return &Diarizer{cfg: cfg, fe: newFeatureExtractor(cfg), sess: sess, envInit: envInit}, nil
+	if workers < 1 {
+		workers = 1
+	}
+	return &Diarizer{
+		cfg:     cfg,
+		fe:      newFeatureExtractor(cfg),
+		sess:    sess,
+		sem:     make(chan struct{}, workers),
+		envInit: envInit,
+	}, nil
 }
 
 // Close releases the session and, if this Diarizer initialized the ORT
@@ -110,6 +121,15 @@ func (d *Diarizer) frameDuration() float64 {
 // run extracts features and runs the chunked encoder, returning the per-frame
 // speaker logits (mel rate) for the whole audio.
 func (d *Diarizer) run(ctx context.Context, samples []float32) ([][]float32, error) {
+	// Bound concurrent runs. The session is CPU-only and shared, so the
+	// semaphore caps concurrency and memory, not correctness.
+	select {
+	case d.sem <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer func() { <-d.sem }()
+
 	mel := d.fe.extract(samples)
 	if len(mel) == 0 {
 		return nil, fmt.Errorf("no features extracted")

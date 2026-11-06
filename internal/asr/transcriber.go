@@ -43,9 +43,12 @@ type Config struct {
 	SubsamplingFactor int    `json:"subsampling_factor"`
 }
 
-// decoderWorker holds a pre-initialized decoder session with reusable tensors.
-// Each worker is owned by at most one goroutine at a time via the pool channel.
+// decoderWorker is one concurrent transcription slot: a decoder session with
+// reusable tensors, plus, on GPU, its private encoder session so no inference
+// session is shared across requests. Each worker has one owner at a time.
 type decoderWorker struct {
+	// encoder is nil on CPU, where every worker shares Transcriber.encoder.
+	encoder   *ort.DynamicAdvancedSession
 	session   *ort.AdvancedSession
 	encOut    *ort.Tensor[float32]
 	targets   *ort.Tensor[int32]
@@ -58,6 +61,9 @@ type decoderWorker struct {
 }
 
 func (w *decoderWorker) destroy() {
+	if w.encoder != nil {
+		w.encoder.Destroy()
+	}
 	if w.session != nil {
 		w.session.Destroy()
 	}
@@ -85,6 +91,18 @@ func (w *decoderWorker) destroy() {
 	if w.state2Out != nil {
 		w.state2Out.Destroy()
 	}
+}
+
+// newEncoderSession opens the encoder model as a dynamic session so input
+// shapes vary with audio length. sessOpts is nil on CPU and device-specific on
+// GPU.
+func newEncoderSession(encoderPath string, sessOpts *ort.SessionOptions) (*ort.DynamicAdvancedSession, error) {
+	return ort.NewDynamicAdvancedSession(
+		encoderPath,
+		[]string{"audio_signal", "length"},
+		[]string{"outputs", "encoded_lengths"},
+		sessOpts,
+	)
 }
 
 func newDecoderWorker(decoderPath string, vocabSize int, sessOpts *ort.SessionOptions) (*decoderWorker, error) {
@@ -179,10 +197,11 @@ func ParseProvider(s string) (Provider, error) {
 	}
 }
 
-// GPUConfig selects the execution provider and, for GPU providers, the device.
+// GPUConfig selects the execution provider and, for GPU providers, the devices
+// to spread workers over. Devices is ignored on CPU.
 type GPUConfig struct {
 	Provider Provider
-	DeviceID int
+	Devices  []int
 }
 
 type Transcriber struct {
@@ -234,15 +253,14 @@ type BoundaryConfig struct {
 	VADModelPath string
 }
 
-// buildSessionOptions returns the ONNX Runtime session options for the
-// configured execution provider. It returns (nil, nil) for the CPU provider so
-// sessions are created with default CPU behavior, identical to the pre-GPU code
-// path. For a GPU provider it returns a configured *ort.SessionOptions that the
-// caller owns and must Destroy after all sessions are created (ORT copies the
-// options into each session at creation time, so the object is safe to free
-// once sessions exist). A future execution provider is added here.
-func buildSessionOptions(gpu GPUConfig) (*ort.SessionOptions, error) {
-	if gpu.Provider == ProviderCPU || gpu.Provider == "" {
+// buildSessionOptionsForDevice returns ONNX Runtime session options for one
+// device of an execution provider. It returns nil for CPU, so sessions use ORT
+// defaults exactly as the pre-GPU path did. For CUDA it pins the session to the
+// given device and returns an options object the caller owns and must Destroy
+// once every session built from it exists (ORT copies the options at creation
+// time).
+func buildSessionOptionsForDevice(provider Provider, deviceID int) (*ort.SessionOptions, error) {
+	if provider == ProviderCPU || provider == "" {
 		return nil, nil
 	}
 
@@ -251,7 +269,7 @@ func buildSessionOptions(gpu GPUConfig) (*ort.SessionOptions, error) {
 		return nil, fmt.Errorf("create session options: %w", err)
 	}
 
-	switch gpu.Provider {
+	switch provider {
 	case ProviderCUDA:
 		cudaOpts, err := ort.NewCUDAProviderOptions()
 		if err != nil {
@@ -260,26 +278,25 @@ func buildSessionOptions(gpu GPUConfig) (*ort.SessionOptions, error) {
 		}
 		defer cudaOpts.Destroy()
 		if err := cudaOpts.Update(map[string]string{
-			"device_id": strconv.Itoa(gpu.DeviceID),
-			// EXHAUSTIVE (the ORT default) benchmarks every cuDNN convolution
-			// algorithm on first run and can reserve many GB of workspace for a
-			// single Conv, which OOMs the encoder on longer audio. HEURISTIC
-			// picks a good algorithm without that up-front allocation.
+			"device_id": strconv.Itoa(deviceID),
+			// ORT's EXHAUSTIVE default benchmarks every cuDNN algorithm on
+			// first use and reserves several GB of workspace, which OOMs the
+			// encoder on longer audio. HEURISTIC avoids that up-front cost.
 			"cudnn_conv_algo_search": "HEURISTIC",
-			// Grow the GPU arena by exactly what is requested instead of the
-			// default power-of-two steps, which otherwise compounds the above.
+			// Grow the arena by exactly what is requested; the power-of-two
+			// default compounds the cost of the setting above.
 			"arena_extend_strategy": "kSameAsRequested",
 		}); err != nil {
 			opts.Destroy()
-			return nil, fmt.Errorf("set CUDA provider options (device %d): %w", gpu.DeviceID, err)
+			return nil, fmt.Errorf("set CUDA provider options (device %d): %w", deviceID, err)
 		}
 		if err := opts.AppendExecutionProviderCUDA(cudaOpts); err != nil {
 			opts.Destroy()
-			return nil, fmt.Errorf("enable CUDA execution provider (device %d): %w", gpu.DeviceID, err)
+			return nil, fmt.Errorf("enable CUDA execution provider (device %d): %w", deviceID, err)
 		}
 	default:
 		opts.Destroy()
-		return nil, fmt.Errorf("unsupported GPU provider %q (supported: cpu, cuda)", gpu.Provider)
+		return nil, fmt.Errorf("unsupported GPU provider %q (supported: cpu, cuda)", provider)
 	}
 
 	return opts, nil
@@ -369,44 +386,63 @@ func NewTranscriber(modelsDir string, workers int, opts Options) (*Transcriber, 
 		}
 	}
 
-	// Build execution-provider session options. nil for CPU (default behavior);
-	// a configured object for GPU that we own and destroy once every session
-	// below has been created (ORT copies options into each session).
-	sessOpts, err := buildSessionOptions(opts.GPU)
-	if err != nil {
-		return nil, fmt.Errorf("failed to configure execution provider: %w", err)
-	}
-	if sessOpts != nil {
-		defer sessOpts.Destroy()
-	}
-
-	// Encoder runs as a single long-lived dynamic session reused across requests.
-	// Input/output shapes vary with audio length, so we pass freshly shaped
-	// tensors to each Run rather than rebuilding the session. ORT Run is
-	// thread-safe on a shared session and every request supplies its own
-	// tensors, so this is safe under the concurrent decoder worker model.
-	t.encoder, err = ort.NewDynamicAdvancedSession(
-		encoderPath,
-		[]string{"audio_signal", "length"},
-		[]string{"outputs", "encoded_lengths"},
-		sessOpts,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create encoder session: %w", err)
-	}
-
-	// Create decoder worker pool — each worker owns a persistent session and
-	// pre-allocated tensors. Workers are acquired per request and returned after.
+	// The worker pool is the single concurrency gate: each worker is acquired
+	// when a request enters the inference pipeline and held through mel, VAD,
+	// encoder, and decoder. On CPU every worker shares one encoder, because a
+	// session is safe to run concurrently and host RAM is expensive. On GPU
+	// each worker owns its own encoder+decoder pair on one device, so nothing
+	// is shared and nothing races; workers are spread round-robin.
 	if workers < 1 {
 		workers = 1
 	}
+	isGPU := opts.GPU.Provider == ProviderCUDA
+	devices := opts.GPU.Devices
+	if isGPU && len(devices) == 0 {
+		devices = []int{0}
+	}
+
+	// On CPU build the one shared encoder. On GPU the per-worker encoders are
+	// created with the workers below.
+	if !isGPU {
+		t.encoder, err = newEncoderSession(encoderPath, nil)
+		if err != nil {
+			t.Close()
+			return nil, fmt.Errorf("failed to create encoder session: %w", err)
+		}
+	}
+
 	t.decoderPool = make(chan *decoderWorker, workers)
 	for i := 0; i < workers; i++ {
+		var sessOpts *ort.SessionOptions
+		var enc *ort.DynamicAdvancedSession
+
+		if isGPU {
+			deviceID := devices[i%len(devices)]
+			sessOpts, err = buildSessionOptionsForDevice(ProviderCUDA, deviceID)
+			if err != nil {
+				t.Close()
+				return nil, fmt.Errorf("configure CUDA device %d: %w", deviceID, err)
+			}
+			enc, err = newEncoderSession(encoderPath, sessOpts)
+			if err != nil {
+				sessOpts.Destroy()
+				t.Close()
+				return nil, fmt.Errorf("create encoder session for worker %d (device %d): %w", i, deviceID, err)
+			}
+		}
+
 		w, err := newDecoderWorker(decoderPath, t.vocabSize, sessOpts)
+		if sessOpts != nil {
+			sessOpts.Destroy()
+		}
 		if err != nil {
+			if enc != nil {
+				enc.Destroy()
+			}
 			t.Close()
 			return nil, fmt.Errorf("failed to create decoder worker %d: %w", i, err)
 		}
+		w.encoder = enc
 		t.decoderPool <- w
 	}
 
@@ -420,7 +456,10 @@ func NewTranscriber(modelsDir string, workers int, opts Options) (*Transcriber, 
 		if vadPath == "" {
 			vadPath = filepath.Join(modelsDir, "silero_vad.onnx")
 		}
-		vad, err := newSileroVAD(vadPath, sessOpts)
+		// VAD always runs on CPU: on GPU it would share a session outside the
+		// pool and race the encoders, and its 32 ms windows gain nothing from
+		// GPU kernels.
+		vad, err := newSileroVAD(vadPath, nil)
 		switch {
 		case err == nil:
 			t.vad = vad
@@ -568,6 +607,25 @@ func (t *Transcriber) transcribe(ctx context.Context, audioData []byte, format, 
 	return t.transcribeSamples(ctx, waveform, emit)
 }
 
+// acquireWorker waits for a free worker, or returns ctx.Err() when the request
+// is canceled while every worker is busy. The caller must return the worker
+// with releaseWorker.
+func (t *Transcriber) acquireWorker(ctx context.Context) (*decoderWorker, error) {
+	select {
+	case w := <-t.decoderPool:
+		return w, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// releaseWorker returns a worker to the pool. The recover guards a send on a
+// pool already closed by Close during shutdown.
+func (t *Transcriber) releaseWorker(w *decoderWorker) {
+	defer func() { _ = recover() }()
+	t.decoderPool <- w
+}
+
 // transcribeSamples transcribes already-loaded mono 16 kHz samples; it is the
 // shared core behind the byte-based and samples-based entry points.
 func (t *Transcriber) transcribeSamples(ctx context.Context, waveform []float32, emit func(delta string)) ([]decodedToken, float64, error) {
@@ -592,6 +650,14 @@ func (t *Transcriber) transcribeSamples(ctx context.Context, waveform []float32,
 		}
 		return nil, duration, nil
 	}
+
+	// Hold one worker for the whole pipeline so at most -workers transcriptions
+	// are in flight, bounding mel, VAD, encoder, and decoder together.
+	w, err := t.acquireWorker(ctx)
+	if err != nil {
+		return nil, duration, err
+	}
+	defer t.releaseWorker(w)
 
 	features := t.mel.Extract(waveform)
 	if len(features) == 0 {
@@ -658,7 +724,7 @@ func (t *Transcriber) transcribeSamples(ctx context.Context, waveform []float32,
 		}
 		mel.Normalize(windowFeatures)
 
-		windowTokens, err := t.runInference(ctx, windowFeatures, emitStart, emitEnd, frameOffset, holdFirst, resolveSeam, emit)
+		windowTokens, err := t.runInference(ctx, w, windowFeatures, emitStart, emitEnd, frameOffset, holdFirst, resolveSeam, emit)
 		if err != nil {
 			return nil, duration, fmt.Errorf("inference failed: %w", err)
 		}
@@ -709,7 +775,7 @@ func (t *Transcriber) newBoundaryOracle(features [][]float32, waveform []float32
 	return chainBoundaryOracle{oracles: oracles}
 }
 
-func (t *Transcriber) runInference(ctx context.Context, features [][]float32, emitStart, emitEnd, frameOffset int64, holdFirst int, resolveSeam func(head []decodedToken) []decodedToken, emit func(delta string)) ([]decodedToken, error) {
+func (t *Transcriber) runInference(ctx context.Context, w *decoderWorker, features [][]float32, emitStart, emitEnd, frameOffset int64, holdFirst int, resolveSeam func(head []decodedToken) []decodedToken, emit func(delta string)) ([]decodedToken, error) {
 	batchSize := int64(1)
 	numFeatures := int64(t.config.FeaturesSize)
 	numFrames := int64(len(features))
@@ -748,9 +814,13 @@ func (t *Transcriber) runInference(ctx context.Context, features [][]float32, em
 	}
 	defer outLenTensor.Destroy()
 
-	// Reuse the shared encoder session. Shapes vary per request, so tensors are
-	// supplied to Run each time; the session itself is built once at startup.
-	if err := t.encoder.Run(
+	// Run the encoder: the worker's private session on GPU, the shared session
+	// on CPU. The shared CPU encoder is safe to run concurrently.
+	enc := w.encoder
+	if enc == nil {
+		enc = t.encoder
+	}
+	if err := enc.Run(
 		[]ort.Value{inputTensor, lengthTensor},
 		[]ort.Value{outputTensor, outLenTensor},
 	); err != nil {
@@ -766,7 +836,7 @@ func (t *Transcriber) runInference(ctx context.Context, features [][]float32, em
 
 	// Decoder tensors (encoderOut) must remain alive during tdtDecode.
 	// The defers above fire after tdtDecode returns, so this is safe.
-	return t.tdtDecode(ctx, encoderOut, actualEncodedLen, emitStart, emitEnd, frameOffset, holdFirst, resolveSeam, emit)
+	return t.tdtDecode(ctx, w, encoderOut, actualEncodedLen, emitStart, emitEnd, frameOffset, holdFirst, resolveSeam, emit)
 }
 
 // tdtDecode greedily decodes the encoder output for one window. It decodes the
@@ -781,22 +851,7 @@ func (t *Transcriber) runInference(ctx context.Context, features [][]float32, em
 // emitted; the survivors are streamed in order, then the rest of the window
 // streams as it is decoded. This keeps streaming order correct while buffering
 // only a handful of tokens per seam.
-func (t *Transcriber) tdtDecode(ctx context.Context, encoderOut []float32, encodedLen, emitStart, emitEnd, frameOffset int64, holdFirst int, resolveSeam func(head []decodedToken) []decodedToken, emit func(delta string)) ([]decodedToken, error) {
-	// Acquire a pre-initialized worker. Honor cancellation so a client that
-	// disconnects while all workers are busy does not leak a goroutine.
-	var w *decoderWorker
-	select {
-	case w = <-t.decoderPool:
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-	// Return the worker to the pool when done. Guard against a panic from
-	// sending on a closed pool during shutdown so we never crash the process.
-	defer func() {
-		defer func() { _ = recover() }()
-		t.decoderPool <- w
-	}()
-
+func (t *Transcriber) tdtDecode(ctx context.Context, w *decoderWorker, encoderOut []float32, encodedLen, emitStart, emitEnd, frameOffset int64, holdFirst int, resolveSeam func(head []decodedToken) []decodedToken, emit func(delta string)) ([]decodedToken, error) {
 	if DebugMode {
 		slog.Debug("TDT decode started", "encoderOutLen", len(encoderOut), "encodedLen", encodedLen)
 	}

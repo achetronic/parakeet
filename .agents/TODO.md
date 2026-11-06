@@ -4,26 +4,27 @@ Pending tasks and improvements for the project.
 
 ## Audio Format Support
 
-- [x] **ffmpeg-based audio conversion** — Implemented in `internal/audio/ffmpeg.go`. WAV is parsed in-process (magic-byte detection); any other format is transcoded via an external `ffmpeg` binary. Configurable with `-ffmpeg`, `-ffmpeg-path`, `-ffmpeg-timeout`. See DD-012 for rationale.
+- [x] **ffmpeg conversion** — Done. Non-WAV auto-converted via ffmpeg (configurable). See DD-012.
 
 ## API Completeness
 
-- [x] **Real timed segments in `verbose_json`** — Segments are derived from the decoder's own token positions and duration predictions instead of one hardcoded synthetic segment; `duration` is measured from the decoded waveform rather than the uploaded byte count; `srt`/`vtt` emit one cue per segment. Implemented in `internal/asr/segments.go`. See DD-015.
-- [ ] **Implement `prompt` parameter** — Currently accepted but ignored in the transcription endpoint. Could be used for vocabulary biasing or context priming.
-- [ ] **Implement `temperature` parameter** — Currently accepted but ignored. Would require switching from greedy to sampled decoding in `tdtDecode()`.
-- [ ] **Proper translation support** — The `/v1/audio/translations` endpoint currently delegates to transcription. Parakeet is English-focused, so true translation would require a different model or pipeline.
+- [x] **Real timed segments** — Done. Segments from decoder timesteps; duration from the waveform. See DD-018.
+- [ ] **`prompt` parameter** — Accepted but ignored; could bias the vocabulary.
+- [ ] **`temperature` parameter** — Accepted but ignored; needs sampled decoding.
+- [ ] **Translation** — `/v1/audio/translations` just delegates to transcription.
 
 ## Performance
 
-- [x] **VAD-aware chunk boundaries + seam dedup**: Fixes chunk-seam hallucinations (issue #18) in long-audio mode. Overlap ownership is split on silence via a VAD -> mel-energy -> midpoint cascade, and a seam-level token dedup removes duplicated/colliding tokens. Toggle layers with `-disable-vad-based-chunking` / `-disable-mel-based-chunking`; VAD model path via `-vad-model-path`. See DD-014.
-- [x] **GPU inference** — Implemented via ONNX Runtime execution providers. Opt in with `-gpu cuda` / `-gpu-device N`; a dedicated `*-cuda` Docker image ships the GPU build. CPU remains the default. See DD-013. TensorRT and other accelerators remain out of scope (extend `buildSessionOptions`).
-- [ ] **Batch inference support** — Current implementation processes one audio file at a time. Batching multiple requests could improve throughput under load.
-- [ ] **Higher quality resampling** — `internal/audio/audio.go:resample()` uses linear interpolation. Sinc-based or polyphase resampling would improve audio quality.
+- [x] **VAD-aware chunk boundaries + seam dedup** — Done. Silence-aware overlaps; dedup removes duplicate/colliding tokens. See DD-014.
+- [x] **GPU inference** — Done. `-gpu cuda` / `-gpu-devices`; CUDA Docker image. See DD-013, DD-019.
+- [x] **Concurrent transcriptions** — Done and validated on a real GPU. Worker pool gates the whole pipeline; per-worker encoder on GPU. See DD-019.
+- [ ] **Batch inference** — One audio file at a time today; batching could raise throughput.
+- [ ] **Better resampling** — `resample()` is linear; sinc/polyphase would sound better.
 
 ## Speaker Diarization
 
-- [x] **Speaker diarization support** — Done. Nemotron-3-Diarization ONNX (int8 default, fp32 available) in `internal/diarization/` (own feature extraction, AOSC/FIFO speaker cache, ONNX session), word-level timestamps in `internal/asr/words.go`, and the merge in `internal/server/merge.go`. Enabled per request with `diarize=true`. See DD-015 and DD-016.
+- [x] **Speaker diarization** — Done. Nemotron-3 ONNX + word-timestamp merge; `diarize=true`. See DD-015, DD-016.
 
 ## Testing
 
-- [ ] **Expand test coverage** — Add integration tests for the full transcription pipeline and edge cases (very short audio, max length audio, various WAV formats).
+- [ ] **Expand test coverage** — Integration tests: very short, max-length, and various WAV formats.

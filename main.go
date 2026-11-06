@@ -21,6 +21,7 @@ const envPrefix = "PARAKEET_"
 
 func main() {
 	cfg := server.Config{}
+	var gpuDevicesRaw string
 
 	flag.IntVar(&cfg.Port, "port", 5092, "Server port")
 	flag.StringVar(&cfg.ModelsDir, "models", "./models", "Models directory")
@@ -31,7 +32,7 @@ func main() {
 	flag.StringVar(&cfg.FFmpegPath, "ffmpeg-path", "", "Path to the ffmpeg binary (default: resolved from PATH)")
 	flag.DurationVar(&cfg.FFmpegTimeout, "ffmpeg-timeout", 60*time.Second, "Maximum wall-clock time for a single ffmpeg conversion")
 	flag.StringVar(&cfg.GPUProvider, "gpu", "cpu", "Execution provider: cpu or cuda")
-	flag.IntVar(&cfg.GPUDeviceID, "gpu-device", 0, "GPU device index for cuda")
+	flag.StringVar(&gpuDevicesRaw, "gpu-devices", "0", "Comma-separated CUDA device ids for inference workers, e.g. \"0,1,2\"")
 	flag.IntVar(&cfg.ChunkSeconds, "chunk-seconds", 60, "Sliding-window size in seconds for long audio (must stay under the model limit)")
 	flag.IntVar(&cfg.ChunkOverlapSeconds, "chunk-overlap-seconds", 15, "Overlap in seconds between consecutive chunks")
 	flag.BoolVar(&cfg.LongAudio, "long-audio", false, "Split audio longer than the model limit into overlapping chunks instead of rejecting it")
@@ -44,6 +45,13 @@ func main() {
 	// Any flag not set on the command line falls back to its matching env var,
 	// e.g. --log-level -> PARAKEET_LOG_LEVEL. Precedence: CLI flag > env var > default.
 	applyEnvDefaults(flag.CommandLine)
+
+	devices, err := server.ParseGPUDevices(gpuDevicesRaw)
+	if err != nil {
+		slog.Error("invalid gpu-devices", "error", err)
+		os.Exit(1)
+	}
+	cfg.GPUDevices = devices
 
 	setupLogger(cfg.LogFormat, cfg.LogLevel)
 
