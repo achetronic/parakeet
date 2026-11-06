@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,6 +20,29 @@ import (
 )
 
 const apiKeyEnvVar = "PARAKEET_API_KEY"
+
+// ParseGPUDevices splits a comma-separated list of CUDA device ids ("0,1,2")
+// into an int slice. Empty input yields nil. It rejects blank entries and
+// anything that is not a non-negative integer.
+func ParseGPUDevices(s string) ([]int, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, nil
+	}
+	var devices []int
+	for _, part := range strings.Split(s, ",") {
+		id := strings.TrimSpace(part)
+		if id == "" {
+			return nil, fmt.Errorf("empty device id in %q", s)
+		}
+		n, err := strconv.Atoi(id)
+		if err != nil || n < 0 {
+			return nil, fmt.Errorf("invalid device id %q", id)
+		}
+		devices = append(devices, n)
+	}
+	return devices, nil
+}
 
 // Config holds the server configuration
 type Config struct {
@@ -44,8 +68,9 @@ type Config struct {
 	// or "cuda". An unknown value fails fast at startup.
 	GPUProvider string
 
-	// GPUDeviceID selects the GPU device index for GPU providers.
-	GPUDeviceID int
+	// GPUDevices lists the CUDA devices to spread inference workers over, e.g.
+	// {0, 1, 2}. Ignored on CPU. Empty means a single device.
+	GPUDevices []int
 
 	// ChunkSeconds is the sliding-window size for long audio, in seconds.
 	// ChunkOverlapSeconds is how much consecutive windows share so words at
@@ -103,7 +128,7 @@ func New(cfg Config) (*Server, error) {
 		FFmpeg: converter,
 		GPU: asr.GPUConfig{
 			Provider: provider,
-			DeviceID: cfg.GPUDeviceID,
+			Devices:  cfg.GPUDevices,
 		},
 		Chunk: asr.ChunkConfig{
 			Enabled:        cfg.LongAudio,
@@ -125,7 +150,7 @@ func New(cfg Config) (*Server, error) {
 	// deployments do not need the extra model.
 	var diarizer *diarization.Diarizer
 	if cfg.EnableDiarization {
-		d, err := diarization.New(filepath.Join(cfg.ModelsDir, "diarization"))
+		d, err := diarization.New(filepath.Join(cfg.ModelsDir, "diarization"), cfg.Workers)
 		if err != nil {
 			transcriber.Close()
 			return nil, fmt.Errorf("failed to initialize diarizer: %w", err)

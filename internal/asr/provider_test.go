@@ -54,18 +54,18 @@ func TestParseProviderErrorNamesSupported(t *testing.T) {
 	}
 }
 
-// buildSessionOptions must not touch the ONNX Runtime for the CPU provider:
-// it returns (nil, nil) so sessions are created with default CPU behavior,
-// identical to the pre-GPU path. The CUDA branch requires a loaded runtime and
-// a GPU, so it is exercised manually, not in CI (see spec acceptance criteria).
+// buildSessionOptionsForDevice must not touch the ONNX Runtime for the CPU
+// provider: it returns (nil, nil) so sessions are created with default CPU
+// behavior, identical to the pre-GPU path. The CUDA branch requires a loaded
+// runtime and a GPU, so it is exercised manually, not in CI.
 func TestBuildSessionOptionsCPU(t *testing.T) {
 	for _, p := range []Provider{ProviderCPU, Provider("")} {
-		opts, err := buildSessionOptions(GPUConfig{Provider: p})
+		opts, err := buildSessionOptionsForDevice(p, 0)
 		if err != nil {
-			t.Fatalf("buildSessionOptions(%q) error: %v", p, err)
+			t.Fatalf("buildSessionOptionsForDevice(%q, 0) error: %v", p, err)
 		}
 		if opts != nil {
-			t.Errorf("buildSessionOptions(%q) = %v, want nil", p, opts)
+			t.Errorf("buildSessionOptionsForDevice(%q, 0) = %v, want nil", p, opts)
 		}
 	}
 }
