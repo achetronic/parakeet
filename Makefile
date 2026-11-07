@@ -45,14 +45,18 @@ all: build
 $(BIN_DIR):
 	@mkdir -p $(BIN_DIR)
 
+################################################################################
 ## Build targets
+################################################################################
 
 build: $(BIN_DIR) ## Build the binary
 	$(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME) .
 
 # NOTE: Static build (CGO_ENABLED=0) is not possible because onnxruntime_go requires CGO
 
+################################################################################
 ## Development targets
+################################################################################
 
 run: build ## Build and run the server
 	@if [ -z "$(ONNXRUNTIME_LIB)" ]; then \
@@ -71,7 +75,9 @@ run-dev: build ## Run with custom port for development
 clean: ## Remove build artifacts
 	rm -rf $(BIN_DIR)
 
+################################################################################
 ## Code quality targets
+################################################################################
 
 fmt: ## Format source code
 	$(GOFMT) -s -w .
@@ -88,7 +94,9 @@ test-coverage: ## Run tests with coverage
 	$(GOTEST) -v -coverprofile=coverage.out ./...
 	$(GOCMD) tool cover -html=coverage.out -o coverage.html
 
+################################################################################
 ## Dependency targets
+################################################################################
 
 deps: ## Download dependencies
 	$(GOMOD) download
@@ -113,7 +121,9 @@ deps-onnxruntime: ## Install ONNX Runtime library
 	rm -rf /tmp/onnxruntime.tgz /tmp/onnxruntime-linux-$$ARCH_NAME-$(ONNXRUNTIME_VERSION) && \
 	echo "ONNX Runtime installed to /usr/local/lib/"
 
+################################################################################
 ## Model targets
+################################################################################
 # Full model lifecycle in three stages: train (export assets), package (build
 # + push OCI images), and download (fetch prebuilt assets).
 
@@ -218,7 +228,9 @@ models-diarization-fp32: ## Download fp32 diarization model (~400MB)
 	@curl -L -o $(DIARIZATION_DIR)/model.onnx_data "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/onnx/model.onnx_data"
 	@echo "Diarization model downloaded to $(DIARIZATION_DIR)"
 
+################################################################################
 ## Docker targets
+################################################################################
 
 docker-build-int8: ## Build Docker image with embedded int8 models (~670MB)
 	docker build --build-arg MODEL_PRECISION=int8 -t $(DOCKER_IMAGE):$(DOCKER_TAG)-int8 .
@@ -247,7 +259,9 @@ docker-push: ## Push Docker images to registry
 	docker push $(DOCKER_IMAGE):latest-int8
 	docker push $(DOCKER_IMAGE):latest-fp32
 
+################################################################################
 ## Release targets
+################################################################################
 
 release: $(BIN_DIR) release-linux release-darwin release-windows ## Build release binaries for all platforms
 
@@ -262,7 +276,9 @@ release-darwin: $(BIN_DIR) ## Build macOS binaries
 release-windows: $(BIN_DIR) ## Build Windows binary
 	GOOS=windows GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME)-windows-amd64.exe .
 
+################################################################################
 ## Help target
+################################################################################
 
 help: ## Show this help message
 	@echo "Parakeet ASR Server - Makefile targets"
