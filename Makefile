@@ -25,7 +25,7 @@ MODELS_DIR := ./models
 
 .PHONY: all build clean test fmt vet lint run help
 .PHONY: docker-build-int8 docker-build-fp32 docker-build-cuda docker-run-int8 docker-run-fp32 docker-run-cuda docker-push
-.PHONY: model-download model-download-asr model-download-asr-int8 model-download-asr-fp32 model-download-vad model-download-diarization-int8 model-download-diarization-fp32
+.PHONY: model-download model-download-asr model-download-asr-int8 model-download-asr-fp32 model-download-vad model-download-diarization model-download-diarization-int8 model-download-diarization-fp32
 .PHONY: model-training-asr-venv model-training-asr-export model-build-oci-images model-push-oci-images
 .PHONY: release release-linux release-darwin release-windows
 .PHONY: deps-onnxruntime
@@ -168,7 +168,7 @@ MODELS_ASR_INT8_DIR := $(MODELS_DIR)/asr/int8
 MODELS_ASR_FP32_DIR := $(MODELS_DIR)/asr/fp32
 MODELS_VAD_DIR := $(MODELS_DIR)/vad
 
-model-download: model-download-asr model-download-vad model-download-diarization-int8 model-download-diarization-fp32 ## Download every model (ASR, VAD, diarization, both precisions)
+model-download: model-download-asr model-download-vad model-download-diarization ## Download every model (ASR, VAD, diarization, both precisions)
 
 model-download-asr: model-download-asr-int8 model-download-asr-fp32 ## Download ASR models (int8 + fp32)
 
@@ -215,6 +215,8 @@ model-download-vad: ## Download and verify the Silero VAD model (MIT)
 DIARIZATION_REPO := onnx-community/Nemotron-3-Diarization-ONNX
 DIARIZATION_INT8_DIR := $(MODELS_DIR)/diarization/int8
 DIARIZATION_FP32_DIR := $(MODELS_DIR)/diarization/fp32
+
+model-download-diarization: model-download-diarization-int8 model-download-diarization-fp32 ## Download diarization models (int8 + fp32)
 
 model-download-diarization-int8: ## Download int8 diarization model (~120MB)
 	@mkdir -p $(DIARIZATION_INT8_DIR)
@@ -324,6 +326,7 @@ help: ## Show this help message
 	@echo "  \033[36mmodel-download-asr-int8\033[0m  Download ASR int8 models (~670MB)"
 	@echo "  \033[36mmodel-download-asr-fp32\033[0m  Download ASR fp32 models (~2.5GB)"
 	@echo "  \033[36mmodel-download-vad\033[0m  Download and verify the Silero VAD model (MIT)"
+	@echo "  \033[36mmodel-download-diarization\033[0m  Download diarization models (int8 + fp32)"
 	@echo "  \033[36mmodel-download-diarization-int8\033[0m  Download int8 diarization model (~120MB)"
 	@echo "  \033[36mmodel-download-diarization-fp32\033[0m  Download fp32 diarization model (~400MB)"
 	@echo ""
