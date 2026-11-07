@@ -1,0 +1,45 @@
+name: export-models
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Version tag for the images. Empty = checkout main + publish :latest.'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  # Same target as local, but the export runs on CPU, so use the CPU torch wheel.
+  PYTORCH_INDEX_URL: https://download.pytorch.org/whl/cpu
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || 'main' }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        run: pip install --quiet uv
+
+      - name: Create the training venv
+        run: make model-training-asr-venv
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Export and push model images
+        run: make MODEL_TAG="${{ github.event.inputs.tag || 'latest' }}" model-push-oci-images

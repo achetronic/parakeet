@@ -77,8 +77,8 @@ each with both attention modes inside:
 
 | image                                     | contents                        |
 | ----------------------------------------- | ------------------------------- |
-| `ghcr.io/achetronic/parakeet-models-int8` | int8 encoders + decoder + vocab |
-| `ghcr.io/achetronic/parakeet-models-fp32` | fp32 encoders + decoder + vocab |
+| `ghcr.io/achetronic/parakeet-models-asr-int8` | int8 encoders + decoder + vocab |
+| `ghcr.io/achetronic/parakeet-models-asr-fp32` | fp32 encoders + decoder + vocab |
 
 Build locally without pushing:
 
@@ -97,7 +97,7 @@ make MODEL_TAG=v1.0.0 model-push-oci-images
 
 ## CI regeneration
 
-`.github/workflows/models.yaml` regenerates everything and pushes both images.
+`.github/workflows/export-models.yaml` regenerates everything and pushes both images.
 Trigger it manually with a tag. Empty tag means checkout `main` and publish
 `:latest`; a tag checks out that ref and publishes under that tag.
 

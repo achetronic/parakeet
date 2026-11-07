@@ -131,10 +131,13 @@ deps-onnxruntime: ## Install ONNX Runtime library
 # Each model family gets its own venv and export targets. asr is the only one
 # today; add vad/ or diarization/ under training/ and mirror these targets.
 TRAINING_PYTHON ?= training/venv/bin/python
+# Torch index for the training venv. cu126 matches a local GPU machine; CI
+# overrides it to the CPU wheel (export runs on CPU).
+PYTORCH_INDEX_URL ?= https://download.pytorch.org/whl/cu126
 
 model-training-asr-venv: ## Create the training venv with ASR dependencies
 	@uv venv --python 3.12 training/venv
-	@uv pip install --python training/venv/bin/python torch torchaudio --index-url https://download.pytorch.org/whl/cu126
+	@uv pip install --python training/venv/bin/python torch torchaudio --index-url $(PYTORCH_INDEX_URL)
 	@uv pip install --python training/venv/bin/python -r training/asr/requirements.txt
 
 model-training-asr-export: ## Regenerate ASR ONNX assets from the NVIDIA checkpoint
@@ -145,7 +148,7 @@ model-training-asr-export: ## Regenerate ASR ONNX assets from the NVIDIA checkpo
 ### Package (build + publish OCI model images)
 # The model images carry the ASR encoder+decoder split (int8/fp32). They are
 # ASR-specific for now; a future family gets its own image targets if needed.
-MODEL_IMAGE_REPO ?= ghcr.io/achetronic/parakeet-models
+MODEL_IMAGE_REPO ?= ghcr.io/achetronic/parakeet-models-asr
 MODEL_TAG ?= latest
 
 model-build-oci-images: model-training-asr-export ## Build int8 + fp32 model images locally (no push)
