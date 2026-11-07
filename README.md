@@ -187,9 +187,9 @@ curl -L -o parakeet https://github.com/achetronic/parakeet/releases/latest/downl
 chmod +x parakeet
 
 # Download models (using Makefile)
-make models           # int8 quantized models (recommended, ~670MB)
+make model-download-asr           # int8 quantized models (recommended, ~670MB)
 # Or for full precision:
-make models-fp32      # fp32 models (~2.5GB)
+make model-download-asr-fp32      # fp32 models (~2.5GB)
 
 # Run (requires ONNX Runtime - see Installing ONNX Runtime section above)
 ./parakeet -port 5092 -models ./models
@@ -203,8 +203,8 @@ git clone https://github.com/achetronic/parakeet.git
 cd parakeet
 
 # Download models
-make models           # int8 quantized models (recommended)
-# Or: make models-fp32  # full precision models
+make model-download-asr           # int8 quantized models (recommended)
+# Or: make model-download-asr-fp32  # full precision models
 
 # Build
 make build
@@ -377,7 +377,7 @@ avoid this, the overlap is split on silence using a cascade (each layer falls
 through to the next when it cannot decide):
 
 1. **Silero VAD** picks the centre of the longest silence in the overlap. This
-   needs `silero_vad.onnx` in the models directory (downloaded by `make models`;
+   needs `silero_vad.onnx` in the models directory (downloaded by `make model-download-asr`;
    see below). A missing model is not fatal: it warns once and falls back to the
    next layer.
 2. **Mel energy** picks the quietest point of the already-extracted features.
@@ -389,7 +389,7 @@ at each seam. You can turn off individual layers with
 
 ### Speaker Diarization
 
-The server can optionally distinguish speakers using [NVIDIA Nemotron-3-Diarization](https://huggingface.co/nvidia/Nemotron-3-Diarization) (100M parameters, up to 8 speakers), running as a second ONNX model. Diarization is **disabled by default**; enable it with `-enable-diarization` (or `PARAKEET_ENABLE_DIARIZATION=true`) and request it per call with `diarize=true`. The model is bundled by `make models` and in the Docker images.
+The server can optionally distinguish speakers using [NVIDIA Nemotron-3-Diarization](https://huggingface.co/nvidia/Nemotron-3-Diarization) (100M parameters, up to 8 speakers), running as a second ONNX model. Diarization is **disabled by default**; enable it with `-enable-diarization` (or `PARAKEET_ENABLE_DIARIZATION=true`) and request it per call with `diarize=true`. The model is bundled by `make model-download-asr` and in the Docker images.
 
 ### Model Files
 
@@ -416,9 +416,9 @@ Speaker diarization (optional, only when `-enable-diarization` is set) needs a `
 | `preprocessor_config.json`            | 339 B  | Feature extractor config         |
 | `processor_config.json`               | 623 B  | Processor config                 |
 
-Downloaded by `make models` (chained into `models-int8`/`models-fp32`).
+Downloaded by `make model-download-asr` (chained into `model-download-asr-int8`/`model-download-asr-fp32`).
 
-`silero_vad.onnx` ([snakers4/silero-vad](https://github.com/snakers4/silero-vad), MIT, pinned to release v6.2.1) is downloaded and checksum-verified by `make models`. It is only used to place chunk boundaries on silence in long-audio mode; if it is missing the server logs a warning once and falls back to mel-energy boundaries.
+`silero_vad.onnx` ([snakers4/silero-vad](https://github.com/snakers4/silero-vad), MIT, pinned to release v6.2.1) is downloaded and checksum-verified by `make model-download-asr`. It is only used to place chunk boundaries on silence in long-audio mode; if it is missing the server logs a warning once and falls back to mel-energy boundaries.
 
 ## API Reference
 
@@ -651,9 +651,9 @@ make test          # Run tests
 make test-coverage # Run tests with coverage report
 
 # Models
-make models        # Download int8 models (default)
-make models-int8   # Download int8 quantized models
-make models-fp32   # Download full precision models
+make model-download-asr        # Download int8 models (default)
+make model-download-asr-int8   # Download int8 quantized models
+make model-download-asr-fp32   # Download full precision models
 
 # Docker
 make docker-build-int8  # Build Docker image with int8 models
@@ -698,7 +698,7 @@ Common installation locations:
 Download the models:
 
 ```bash
-make models
+make model-download-asr
 ```
 
 ### Out of memory errors

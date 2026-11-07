@@ -25,7 +25,7 @@ MODELS_DIR := ./models
 
 .PHONY: all build clean test fmt vet lint run help
 .PHONY: docker-build-int8 docker-build-fp32 docker-build-cuda docker-run-int8 docker-run-fp32 docker-run-cuda docker-push
-.PHONY: models models-int8 models-fp32 models-silero-vad models-diarization-int8 models-diarization-fp32
+.PHONY: model-download-asr model-download-asr-int8 model-download-asr-fp32 model-download-vad model-download-diarization-int8 model-download-diarization-fp32
 .PHONY: model-training-asr-venv model-training-asr-export model-build-oci-images model-push-oci-images
 .PHONY: release release-linux release-darwin release-windows
 .PHONY: deps-onnxruntime
@@ -161,9 +161,9 @@ model-push-oci-images: model-training-asr-export ## Build and push int8 + fp32 m
 # MODELS_REPO at your own repo to self-host (see training/README.md).
 MODELS_REPO ?= istupakov/parakeet-tdt-0.6b-v3-onnx
 
-models: models-int8 ## Download models (default: int8)
+model-download-asr: model-download-asr-int8 ## Download ASR models (default: int8)
 
-models-int8: models-silero-vad models-diarization-int8 ## Download int8 quantized models (~670MB)
+model-download-asr-int8: model-download-vad model-download-diarization-int8 ## Download ASR int8 quantized models (~670MB)
 	@mkdir -p $(MODELS_DIR)
 	@echo "Downloading Parakeet TDT int8 models from https://huggingface.co/$(MODELS_REPO) ..."
 	@curl -L -o $(MODELS_DIR)/config.json "https://huggingface.co/$(MODELS_REPO)/resolve/main/config.json"
@@ -173,7 +173,7 @@ models-int8: models-silero-vad models-diarization-int8 ## Download int8 quantize
 	@curl -L -o $(MODELS_DIR)/decoder_joint-model.int8.onnx "https://huggingface.co/$(MODELS_REPO)/resolve/main/decoder_joint-model.int8.onnx"
 	@echo "Models downloaded to $(MODELS_DIR)"
 
-models-fp32: models-silero-vad models-diarization-fp32 ## Download fp32 full precision models (~2.5GB)
+model-download-asr-fp32: model-download-vad model-download-diarization-fp32 ## Download ASR fp32 models (~2.5GB)
 	@mkdir -p $(MODELS_DIR)
 	@echo "Downloading Parakeet TDT fp32 models from https://huggingface.co/$(MODELS_REPO) ..."
 	@curl -L -o $(MODELS_DIR)/config.json "https://huggingface.co/$(MODELS_REPO)/resolve/main/config.json"
@@ -193,7 +193,7 @@ SILERO_VAD_VERSION ?= v6.2.1
 SILERO_VAD_SHA256 ?= 1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3
 SILERO_VAD_URL := https://github.com/snakers4/silero-vad/raw/$(SILERO_VAD_VERSION)/src/silero_vad/data/silero_vad.onnx
 
-models-silero-vad: ## Download and verify the Silero VAD model (MIT)
+model-download-vad: ## Download and verify the Silero VAD model (MIT)
 	@mkdir -p $(MODELS_DIR)
 	@echo "Downloading Silero VAD $(SILERO_VAD_VERSION) (MIT) ..."
 	@curl -L -o $(MODELS_DIR)/silero_vad.onnx "$(SILERO_VAD_URL)"
@@ -205,7 +205,7 @@ models-silero-vad: ## Download and verify the Silero VAD model (MIT)
 DIARIZATION_REPO := onnx-community/Nemotron-3-Diarization-ONNX
 DIARIZATION_DIR := $(MODELS_DIR)/diarization
 
-models-diarization-int8: ## Download int8-quantized diarization model (~120MB)
+model-download-diarization-int8: ## Download int8 diarization model (~120MB)
 	@mkdir -p $(DIARIZATION_DIR)
 	@echo "Downloading Nemotron-3-Diarization int8 model from https://huggingface.co/$(DIARIZATION_REPO) ..."
 	@curl -L -o $(DIARIZATION_DIR)/config.json "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/config.json"
@@ -215,7 +215,7 @@ models-diarization-int8: ## Download int8-quantized diarization model (~120MB)
 	@curl -L -o $(DIARIZATION_DIR)/model_quantized.onnx_data "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/onnx/model_quantized.onnx_data"
 	@echo "Diarization model downloaded to $(DIARIZATION_DIR)"
 
-models-diarization-fp32: ## Download fp32 diarization model (~400MB)
+model-download-diarization-fp32: ## Download fp32 diarization model (~400MB)
 	@mkdir -p $(DIARIZATION_DIR)
 	@echo "Downloading Nemotron-3-Diarization fp32 model from https://huggingface.co/$(DIARIZATION_REPO) ..."
 	@curl -L -o $(DIARIZATION_DIR)/config.json "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/config.json"
@@ -308,12 +308,12 @@ help: ## Show this help message
 	@echo "  \033[36mmodel-training-asr-export\033[0m  Regenerate ASR ONNX assets from the NVIDIA checkpoint"
 	@echo "  \033[36mmodel-build-oci-images\033[0m  Build int8 + fp32 model images locally"
 	@echo "  \033[36mmodel-push-oci-images\033[0m  Build and push int8 + fp32 model images to GHCR"
-	@echo "  \033[36mmodels\033[0m              Download models (default: int8)"
-	@echo "  \033[36mmodels-int8\033[0m         Download int8 quantized models (~670MB)"
-	@echo "  \033[36mmodels-fp32\033[0m         Download fp32 full precision models (~2.5GB)"
-	@echo "  \033[36mmodels-silero-vad\033[0m   Download and verify the Silero VAD model (MIT)"
-	@echo "  \033[36mmodels-diarization-int8\033[0m   Download int8 diarization model (~120MB)"
-	@echo "  \033[36mmodels-diarization-fp32\033[0m   Download fp32 diarization model (~400MB)"
+	@echo "  \033[36mmodel-download-asr\033[0m  Download ASR models (default: int8)"
+	@echo "  \033[36mmodel-download-asr-int8\033[0m  Download ASR int8 quantized models (~670MB)"
+	@echo "  \033[36mmodel-download-asr-fp32\033[0m  Download ASR fp32 models (~2.5GB)"
+	@echo "  \033[36mmodel-download-vad\033[0m  Download and verify the Silero VAD model (MIT)"
+	@echo "  \033[36mmodel-download-diarization-int8\033[0m  Download int8 diarization model (~120MB)"
+	@echo "  \033[36mmodel-download-diarization-fp32\033[0m  Download fp32 diarization model (~400MB)"
 	@echo ""
 	@echo "\033[1mDocker:\033[0m"
 	@echo "  \033[36mdocker-build-int8\033[0m   Build Docker image with int8 models"

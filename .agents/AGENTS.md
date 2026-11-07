@@ -27,12 +27,12 @@ make run-dev                # Run with custom port (5092) for development
 ./bin/parakeet -port 8080 -models /path/to/models -log-level=debug -log-format=json -workers=2
 
 # Download models
-make models                 # Download int8 models (default, ~670MB)
-make models-int8            # Download int8 quantized models
-make models-fp32            # Download full precision models (~2.5GB)
-make models-silero-vad      # Download + verify the Silero VAD model (MIT, pinned)
-make models-diarization-int8  # Download int8 diarization model (~120MB)
-make models-diarization-fp32  # Download fp32 diarization model (~400MB)
+make model-download-asr                 # Download int8 models (default, ~670MB)
+make model-download-asr-int8            # Download int8 quantized models
+make model-download-asr-fp32            # Download full precision models (~2.5GB)
+make model-download-vad      # Download + verify the Silero VAD model (MIT, pinned)
+make model-download-diarization-int8  # Download int8 diarization model (~120MB)
+make model-download-diarization-fp32  # Download fp32 diarization model (~400MB)
 
 # Test
 make test                   # Run tests
@@ -398,8 +398,8 @@ No other external Go dependencies. Standard library used for HTTP, JSON, audio p
 - `decoder_joint-model.int8.onnx` (~18MB) or `decoder_joint-model.onnx` (~72MB)
 - `config.json`, `vocab.txt`, `nemo128.onnx`
 - `silero_vad.onnx` (~2.3MB, snakers4/silero-vad v6.2.1, MIT) - used only for VAD-aware chunk boundaries in long-audio mode. Missing file is a graceful degrade (warns once, falls back to mel energy), not a fatal error.
-- `models/diarization/` - Nemotron-3-Diarization: `model_quantized.onnx` + `model_quantized.onnx_data` (int8, ~120MB) or `model.onnx` + `model.onnx_data` (fp32, ~400MB), plus `config.json`, `preprocessor_config.json`, `processor_config.json`. Download via `make models-diarization-int8` / `-fp32` (chained into `make models`).
-- Download via `make models` or manually from HuggingFace (Silero from its GitHub release)
+- `models/diarization/` - Nemotron-3-Diarization: `model_quantized.onnx` + `model_quantized.onnx_data` (int8, ~120MB) or `model.onnx` + `model.onnx_data` (fp32, ~400MB), plus `config.json`, `preprocessor_config.json`, `processor_config.json`. Download via `make model-download-diarization-int8` / `-fp32` (chained into `make model-download-asr`).
+- Download via `make model-download-asr` or manually from HuggingFace (Silero from its GitHub release)
 
 ### Chunk Boundary Selection (long-audio mode)
 

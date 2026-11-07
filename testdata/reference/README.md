@@ -34,7 +34,7 @@ to the reference `.srt` text for the same time range, so a human can eyeball
 every seam quickly. It needs ONNX Runtime and the models locally but no network.
 
 ```bash
-# Requires the models (make models-int8) and ONNX Runtime on the host.
+# Requires the models (make model-download-asr-int8) and ONNX Runtime on the host.
 PARAKEET_MODELS=./models \
 PARAKEET_SEAM_AUDIO=./testdata/reference/learn-case-interviews.mp3 \
 PARAKEET_SEAM_SRT=./testdata/reference/learn-case-interviews.srt \

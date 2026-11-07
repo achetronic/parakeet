@@ -39,7 +39,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY Makefile /app/Makefile
-RUN make MODELS_DIR=/models models-${MODEL_PRECISION}
+RUN make MODELS_DIR=/models model-download-asr-${MODEL_PRECISION}
 
 # Runtime stage
 FROM debian:bookworm-slim

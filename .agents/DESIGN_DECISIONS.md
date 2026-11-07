@@ -76,13 +76,13 @@ Architectural and design decisions made in this project.
 
 **Context**: The model ships in fp32 and int8.
 
-**Decision**: Default to int8 (`make models`).
+**Decision**: Default to int8 (`make model-download-asr`).
 
 **Rationale**: ~4x smaller (~670MB vs ~2.5GB), minimal accuracy loss.
 
 **Consequences**:
 
-- `latest` images use int8; fp32 via `make models-fp32`. Same code paths.
+- `latest` images use int8; fp32 via `make model-download-asr-fp32`. Same code paths.
 
 ## DD-007: Multi-Stage Docker Build
 
