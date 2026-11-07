@@ -157,21 +157,27 @@ models-fp32: models-silero-vad models-diarization-fp32 ## Download fp32 full pre
 	@curl -L -o $(MODELS_DIR)/decoder_joint-model.onnx "https://huggingface.co/$(MODELS_REPO)/resolve/main/decoder_joint-model.onnx"
 	@echo "Models downloaded to $(MODELS_DIR)"
 
-# Training pipeline. The venv is built by model-training-venv.
+# Training pipeline. One recipe drives every model family. asr is the only one
+# today; add vad/ or diarization/ under training/ with their own export.py and
+# requirements.txt and point MODEL_FAMILY at them.
+MODEL_FAMILY ?= asr
 TRAINING_PYTHON ?= training/venv/bin/python
+TRAINING_FAMILY_DIR := training/$(MODEL_FAMILY)
 MODEL_IMAGE_REPO ?= ghcr.io/achetronic/parakeet-models
 MODEL_TAG ?= latest
 
-model-training: ## Regenerate every ASR ONNX asset from the NVIDIA checkpoint
+model-training: ## Regenerate ONNX assets for $(MODEL_FAMILY)
 	@test -x $(TRAINING_PYTHON) || (echo "training venv missing, run: make model-training-venv" && exit 1)
-	@$(TRAINING_PYTHON) training/asr/export.py --checkpoint training/checkpoint/parakeet-tdt-0.6b-v3.nemo --out training/asr/assets
-	@echo "Assets written to training/asr/assets/"
+	@$(TRAINING_PYTHON) $(TRAINING_FAMILY_DIR)/export.py --out $(TRAINING_FAMILY_DIR)/assets
+	@echo "Assets written to $(TRAINING_FAMILY_DIR)/assets/"
 
-model-training-venv: ## Create the training venv (Python 3.12 + nemo_toolkit)
+model-training-venv: ## Create the training venv (installs $(MODEL_FAMILY) deps)
 	@uv venv --python 3.12 training/venv
 	@uv pip install --python training/venv/bin/python torch torchaudio --index-url https://download.pytorch.org/whl/cu126
-	@uv pip install --python training/venv/bin/python -r training/requirements.txt
+	@uv pip install --python training/venv/bin/python -r $(TRAINING_FAMILY_DIR)/requirements.txt
 
+# The model images carry the ASR encoder+decoder split (int8/fp32). They are
+# ASR-specific for now; a future family gets its own image recipe if needed.
 model-image: model-training ## Build int8 + fp32 model images locally (no push)
 	@./training/asr/build-image.sh int8 "$(MODEL_IMAGE_REPO)-int8" "$(MODEL_TAG)"
 	@./training/asr/build-image.sh fp32 "$(MODEL_IMAGE_REPO)-fp32" "$(MODEL_TAG)"
