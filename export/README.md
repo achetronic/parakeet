@@ -1,26 +1,26 @@
 # Regenerating the ONNX models
 
-`training/asr/export.py` rebuilds every ASR ONNX asset the server loads, from
+`export/asr/export.py` rebuilds every ASR ONNX asset the server loads, from
 the official NVIDIA checkpoint. No third-party conversions needed.
 
 The directory is split by model family so future exports (VAD, diarization)
 get their own subfolder. Each family keeps its code, checkpoint, requirements
-and assets inside its own `training/<family>/` directory. The Makefile has
+and assets inside its own `export/<family>/` directory. The Makefile has
 per-family targets, so `asr` is explicit in the target names.
 
 ```
-training/
+export/
 ├── asr/               export.py + Dockerfile.models + build-image.sh
 │   ├── checkpoint/    .nemo checkpoint, gitignored
 │   ├── assets/        generated output, gitignored
 │   └── requirements.txt
-├── venv/              shared training environment, gitignored
+├── venv/              shared export environment, gitignored
 └── README.md
 ```
 
 ## What the export produces
 
-Written to `training/asr/assets/`:
+Written to `export/asr/assets/`:
 
 | file                            | what                                                 |
 | ------------------------------- | ---------------------------------------------------- |
@@ -45,30 +45,30 @@ Written to `training/asr/assets/`:
 ## Setup, once
 
 ```sh
-make model-training-asr-venv
+make model-export-asr-venv
 ```
 
-This builds `training/venv` with Python 3.12 and torch, plus the dependencies
-from `training/asr/requirements.txt` (nemo_toolkit).
+This builds `export/venv` with Python 3.12 and torch, plus the dependencies
+from `export/asr/requirements.txt` (nemo_toolkit).
 
 ## Regenerate the assets
 
 ```sh
-make model-training-asr-export
+make model-export-asr
 ```
 
 If the checkpoint is missing it downloads it from
 `nvidia/parakeet-tdt-0.6b-v3` (no token required) into
-`training/asr/checkpoint/`.
+`export/asr/checkpoint/`.
 
 Manual run:
 
 ```sh
-training/venv/bin/python training/asr/export.py
+export/venv/bin/python export/asr/export.py
 ```
 
-`--checkpoint` and `--out` default to `training/asr/checkpoint/` and
-`training/asr/assets/`.
+`--checkpoint` and `--out` default to `export/asr/checkpoint/` and
+`export/asr/assets/`.
 
 ## Model images
 

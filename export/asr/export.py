@@ -43,7 +43,7 @@ CHECKPOINT_URL = (
     "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3/resolve/main/"
     "parakeet-tdt-0.6b-v3.nemo"
 )
-FAMILY_DIR = os.path.dirname(os.path.abspath(__file__))  # training/asr
+FAMILY_DIR = os.path.dirname(os.path.abspath(__file__))  # export/asr
 DEFAULT_CHECKPOINT = os.path.join(FAMILY_DIR, "checkpoint", "parakeet-tdt-0.6b-v3.nemo")
 
 # Keep in sync with models/config.json.

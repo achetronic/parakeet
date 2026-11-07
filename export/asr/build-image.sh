@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build a Parakeet model image from training/asr/assets.
+# Build a Parakeet model image from export/asr/assets.
 # Usage: build-image.sh <int8|fp32> <image> <tag> [--push]
 
 mode=$1
@@ -10,10 +10,10 @@ tag=$3
 push=${4:-}
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-assets="$root/training/asr/assets"
-stage="$root/training/.image/$mode"
+assets="$root/export/asr/assets"
+stage="$root/export/.image/$mode"
 
-rm -rf "$root/training/.image"
+rm -rf "$root/export/.image"
 mkdir -p "$stage"
 
 cp "$assets/config.json" "$assets/vocab.txt" "$stage/"
@@ -39,7 +39,7 @@ case "$mode" in
     ;;
 esac
 
-docker build -f "$root/training/asr/Dockerfile.models" -t "$image:$tag" "$stage"
+docker build -f "$root/export/asr/Dockerfile.models" -t "$image:$tag" "$stage"
 
 if [ "$push" = "--push" ]; then
   docker push "$image:$tag"

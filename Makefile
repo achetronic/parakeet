@@ -26,7 +26,7 @@ MODELS_DIR := ./models
 .PHONY: all build clean test fmt vet lint run help
 .PHONY: docker-build-int8 docker-build-fp32 docker-build-cuda docker-run-int8 docker-run-fp32 docker-run-cuda docker-push
 .PHONY: model-download model-download-asr model-download-asr-int8 model-download-asr-fp32 model-download-vad model-download-diarization model-download-diarization-int8 model-download-diarization-fp32
-.PHONY: model-training-asr-venv model-training-asr-export model-build-oci-images model-push-oci-images
+.PHONY: model-export-asr-venv model-export-asr model-build-oci-images model-push-oci-images
 .PHONY: release release-linux release-darwin release-windows
 .PHONY: deps-onnxruntime
 
@@ -129,21 +129,21 @@ deps-onnxruntime: ## Install ONNX Runtime library
 
 ### Training (export ONNX assets from checkpoints)
 # Each model family gets its own venv and export targets. asr is the only one
-# today; add vad/ or diarization/ under training/ and mirror these targets.
-TRAINING_PYTHON ?= training/venv/bin/python
-# Torch index for the training venv. cu126 matches a local GPU machine; CI
+# today; add vad/ or diarization/ under export/ and mirror these targets.
+EXPORT_PYTHON ?= export/venv/bin/python
+# Torch index for the export venv. cu126 matches a local GPU machine; CI
 # overrides it to the CPU wheel (export runs on CPU).
 PYTORCH_INDEX_URL ?= https://download.pytorch.org/whl/cu126
 
-model-training-asr-venv: ## Create the training venv with ASR dependencies
-	@uv venv --python 3.12 training/venv
-	@uv pip install --python training/venv/bin/python torch torchaudio --index-url $(PYTORCH_INDEX_URL)
-	@uv pip install --python training/venv/bin/python -r training/asr/requirements.txt
+model-export-asr-venv: ## Create the export venv with ASR dependencies
+	@uv venv --python 3.12 export/venv
+	@uv pip install --python export/venv/bin/python torch torchaudio --index-url $(PYTORCH_INDEX_URL)
+	@uv pip install --python export/venv/bin/python -r export/asr/requirements.txt
 
-model-training-asr-export: ## Regenerate ASR ONNX assets from the NVIDIA checkpoint
-	@test -x $(TRAINING_PYTHON) || (echo "training venv missing, run: make model-training-asr-venv" && exit 1)
-	@$(TRAINING_PYTHON) training/asr/export.py --out training/asr/assets
-	@echo "Assets written to training/asr/assets/"
+model-export-asr: ## Regenerate ASR ONNX assets from the NVIDIA checkpoint
+	@test -x $(EXPORT_PYTHON) || (echo "export venv missing, run: make model-export-asr-venv" && exit 1)
+	@$(EXPORT_PYTHON) export/asr/export.py --out export/asr/assets
+	@echo "Assets written to export/asr/assets/"
 
 ### Package (build + publish OCI model images)
 # The model images carry the ASR encoder+decoder split (int8/fp32). They are
@@ -151,13 +151,13 @@ model-training-asr-export: ## Regenerate ASR ONNX assets from the NVIDIA checkpo
 MODEL_IMAGE_REPO ?= ghcr.io/achetronic/parakeet-models-asr
 MODEL_TAG ?= latest
 
-model-build-oci-images: model-training-asr-export ## Build int8 + fp32 model images locally (no push)
-	@./training/asr/build-image.sh int8 "$(MODEL_IMAGE_REPO)-int8" "$(MODEL_TAG)"
-	@./training/asr/build-image.sh fp32 "$(MODEL_IMAGE_REPO)-fp32" "$(MODEL_TAG)"
+model-build-oci-images: model-export-asr ## Build int8 + fp32 model images locally (no push)
+	@./export/asr/build-image.sh int8 "$(MODEL_IMAGE_REPO)-int8" "$(MODEL_TAG)"
+	@./export/asr/build-image.sh fp32 "$(MODEL_IMAGE_REPO)-fp32" "$(MODEL_TAG)"
 
-model-push-oci-images: model-training-asr-export ## Build and push int8 + fp32 model images to GHCR
-	@./training/asr/build-image.sh int8 "$(MODEL_IMAGE_REPO)-int8" "$(MODEL_TAG)" --push
-	@./training/asr/build-image.sh fp32 "$(MODEL_IMAGE_REPO)-fp32" "$(MODEL_TAG)" --push
+model-push-oci-images: model-export-asr ## Build and push int8 + fp32 model images to GHCR
+	@./export/asr/build-image.sh int8 "$(MODEL_IMAGE_REPO)-int8" "$(MODEL_TAG)" --push
+	@./export/asr/build-image.sh fp32 "$(MODEL_IMAGE_REPO)-fp32" "$(MODEL_TAG)" --push
 
 ### Download (fetch prebuilt models)
 # models/ is organized by model family first, precision second:
@@ -165,7 +165,7 @@ model-push-oci-images: model-training-asr-export ## Build and push int8 + fp32 m
 # VAD has no precision. model-download pulls everything.
 
 # ASR encoder + decoder assets. Default to the community conversion; point
-# MODELS_REPO at your own repo to self-host (see training/README.md).
+# MODELS_REPO at your own repo to self-host (see export/README.md).
 MODELS_REPO ?= istupakov/parakeet-tdt-0.6b-v3-onnx
 MODELS_ASR_INT8_DIR := $(MODELS_DIR)/asr/int8
 MODELS_ASR_FP32_DIR := $(MODELS_DIR)/asr/fp32
@@ -320,8 +320,8 @@ help: ## Show this help message
 	@echo "  \033[36mdeps-onnxruntime\033[0m    Install ONNX Runtime library (requires sudo)"
 	@echo ""
 	@echo "\033[1mModels:\033[0m"
-	@echo "  \033[36mmodel-training-asr-venv\033[0m  Create the training venv with ASR deps"
-	@echo "  \033[36mmodel-training-asr-export\033[0m  Regenerate ASR ONNX assets from the NVIDIA checkpoint"
+	@echo "  \033[36mmodel-export-asr-venv\033[0m  Create the export venv with ASR deps"
+	@echo "  \033[36mmodel-export-asr\033[0m  Regenerate ASR ONNX assets from the NVIDIA checkpoint"
 	@echo "  \033[36mmodel-build-oci-images\033[0m  Build int8 + fp32 model images locally"
 	@echo "  \033[36mmodel-push-oci-images\033[0m  Build and push int8 + fp32 model images to GHCR"
 	@echo "  \033[36mmodel-download\033[0m  Download every model (ASR + VAD + diarization, both precisions)"

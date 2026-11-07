@@ -36,8 +36,8 @@ jobs:
       - name: Install uv
         run: pip install --quiet uv
 
-      - name: Create the training venv
-        run: make model-training-asr-venv
+      - name: Create the export venv
+        run: make model-export-asr-venv
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
