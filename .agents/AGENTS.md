@@ -27,12 +27,12 @@ make run-dev                # Run with custom port (5092) for development
 ./bin/parakeet -port 8080 -models /path/to/models -log-level=debug -log-format=json -workers=2
 
 # Download models
-make models                 # Download int8 models (default, ~670MB)
-make models-int8            # Download int8 quantized models
-make models-fp32            # Download full precision models (~2.5GB)
-make models-silero-vad      # Download + verify the Silero VAD model (MIT, pinned)
-make models-diarization-int8  # Download int8 diarization model (~120MB)
-make models-diarization-fp32  # Download fp32 diarization model (~400MB)
+make model-download                 # Download every model (ASR + VAD + diarization, both precisions)
+make model-download-asr-int8            # Download int8 quantized ASR models
+make model-download-asr-fp32            # Download full precision ASR models (~2.5GB)
+make model-download-vad      # Download + verify the Silero VAD model (MIT, pinned)
+make model-download-diarization-int8  # Download int8 diarization model (~120MB)
+make model-download-diarization-fp32  # Download fp32 diarization model (~400MB)
 
 # Test
 make test                   # Run tests
@@ -116,12 +116,12 @@ parakeet/
 
 ### `main.go` (Entry Point)
 
-- Parses CLI flags: `-port`, `-models`, `-log-level`, `-log-format`, `-workers`, `-ffmpeg`, `-ffmpeg-path`, `-ffmpeg-timeout`, `-gpu`, `-gpu-devices`, `-chunk-seconds`, `-chunk-overlap-seconds`, `-long-audio`, `-disable-vad-based-chunking`, `-disable-mel-based-chunking`, `-vad-model-path`, `-enable-diarization`
+- Parses CLI flags: `-port`, `-models`, `-model-precision`, `-log-level`, `-log-format`, `-workers`, `-ffmpeg`, `-ffmpeg-path`, `-ffmpeg-timeout`, `-gpu`, `-gpu-devices`, `-chunk-seconds`, `-chunk-overlap-seconds`, `-long-audio`, `-disable-vad-based-chunking`, `-disable-mel-based-chunking`, `-vad-model-path`, `-enable-diarization`
 - Configures `slog` global logger (text or JSON handler, four log levels)
 - Runs server in background goroutine, listens for SIGINT/SIGTERM
 - Graceful shutdown: waits up to 30s for in-flight requests via `http.Server.Shutdown`
 - Calls `srv.Close()` after shutdown to release ONNX resources
-- Default port: 5092, default models dir: `./models`, default log level: `info`, default log format: `text`, default workers: `4`, ffmpeg fallback enabled by default, ffmpeg timeout: `60s`, GPU provider: `cpu`, GPU device: `0`
+- Default port: 5092, default models dir: `./models` (family-first: `asr/`, `vad/`, `diarization/`), default precision `int8`, default log level: `info`, default log format: `text`, default workers: `4`, ffmpeg fallback enabled by default, ffmpeg timeout: `60s`, GPU provider: `cpu`, GPU device: `0`
 
 ### `internal/server/` (HTTP Server Package)
 
@@ -287,12 +287,13 @@ parakeet/
 | `PARAKEET_API_KEY`    | API key for `/v1/*` endpoint authentication | Empty (auth disabled) |
 | `PARAKEET_GPU`        | Execution provider: `cpu` or `cuda`         | `cpu`                 |
 | `PARAKEET_GPU_DEVICES` | Comma-separated CUDA device ids to spread workers over | `0`    |
+| `PARAKEET_MODEL_PRECISION` | Model precision: `int8` or `fp32`   | `int8`               |
 | `PARAKEET_LONG_AUDIO` | Split over-limit audio into overlapping chunks | `false`             |
 | `PARAKEET_CHUNK_SECONDS` | Sliding-window size in seconds | `60`                 |
 | `PARAKEET_CHUNK_OVERLAP_SECONDS` | Overlap between chunks in seconds | `15`                  |
 | `PARAKEET_DISABLE_VAD_BASED_CHUNKING` | Drop the Silero VAD boundary layer | `false`          |
 | `PARAKEET_DISABLE_MEL_BASED_CHUNKING` | Drop the mel-energy boundary layer | `false`          |
-| `PARAKEET_VAD_MODEL_PATH` | Path to silero_vad.onnx                  | `<models>/silero_vad.onnx` |
+| `PARAKEET_VAD_MODEL_PATH` | Path to silero_vad.onnx                  | `<models>/vad/silero_vad.onnx` |
 | `PARAKEET_ENABLE_DIARIZATION` | Load the diarization model and allow `diarize=true` | `false`              |
 
 ## Dependencies
@@ -330,7 +331,7 @@ No other external Go dependencies. Standard library used for HTTP, JSON, audio p
 - Health check included
 - Exposed port: 5092
 - `Dockerfile.cuda`: NVIDIA CUDA base + GPU build of ONNX Runtime, fp32 models, linux/amd64 only. Run with `--gpus all` (nvidia-container-toolkit required).
-- The image bundles Parakeet + Silero VAD + Nemotron-3-Diarization via the Makefile recipes (`make MODELS_DIR=/models models-<precision>`). Diarization is gated at runtime by `PARAKEET_ENABLE_DIARIZATION=true` (or `-enable-diarization`).
+- The image bundles Parakeet + Silero VAD + Nemotron-3-Diarization via the Makefile recipes (`make MODELS_DIR=/models model-download-asr-<precision> model-download-vad model-download-diarization-<precision>`). Diarization is gated at runtime by `PARAKEET_ENABLE_DIARIZATION=true` (or `-enable-diarization`).
 
 ## Common Tasks for Agents
 
@@ -394,12 +395,16 @@ No other external Go dependencies. Standard library used for HTTP, JSON, audio p
 
 ### Model Files Required
 
-- `encoder-model.int8.onnx` (~652MB) or `encoder-model.onnx` (~2.5GB)
-- `decoder_joint-model.int8.onnx` (~18MB) or `decoder_joint-model.onnx` (~72MB)
-- `config.json`, `vocab.txt`, `nemo128.onnx`
-- `silero_vad.onnx` (~2.3MB, snakers4/silero-vad v6.2.1, MIT) - used only for VAD-aware chunk boundaries in long-audio mode. Missing file is a graceful degrade (warns once, falls back to mel energy), not a fatal error.
-- `models/diarization/` - Nemotron-3-Diarization: `model_quantized.onnx` + `model_quantized.onnx_data` (int8, ~120MB) or `model.onnx` + `model.onnx_data` (fp32, ~400MB), plus `config.json`, `preprocessor_config.json`, `processor_config.json`. Download via `make models-diarization-int8` / `-fp32` (chained into `make models`).
-- Download via `make models` or manually from HuggingFace (Silero from its GitHub release)
+`models/` is organized by family, precision inside: `asr/{int8,fp32}`,
+`vad/`, `diarization/{int8,fp32}`. The server reads the family and precision
+from `-models` (default `./models`) and `-model-precision` (default `int8`).
+
+- `asr/int8/encoder-model.int8.onnx` (~652MB) or `asr/fp32/encoder-model.onnx` (~2.5GB)
+- `asr/int8/decoder_joint-model.int8.onnx` (~18MB) or `asr/fp32/decoder_joint-model.onnx` (~72MB)
+- `config.json`, `vocab.txt`, `nemo128.onnx` inside the ASR precision dir
+- `vad/silero_vad.onnx` (~2.3MB, snakers4/silero-vad v6.2.1, MIT). Used only for VAD-aware chunk boundaries in long-audio mode. Missing file is a graceful degrade (warns once, falls back to mel energy), not a fatal error.
+- `diarization/int8/` or `diarization/fp32/` - Nemotron-3-Diarization: `model_quantized.onnx` + `model_quantized.onnx_data` (int8, ~120MB) or `model.onnx` + `model.onnx_data` (fp32, ~400MB), plus `config.json`, `preprocessor_config.json`, `processor_config.json`. Download via `make model-download-diarization-int8` / `-fp32` (chained into `make model-download`).
+- Download via `make model-download` or manually from HuggingFace (Silero from its GitHub release)
 
 ### Chunk Boundary Selection (long-audio mode)
 

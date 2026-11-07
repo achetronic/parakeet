@@ -52,6 +52,10 @@ type Config struct {
 	LogFormat string
 	Workers   int
 
+	// ModelPrecision selects the ONNX precision: "int8" (default) or "fp32".
+	// It picks models/<family>/<precision> under ModelsDir.
+	ModelPrecision string
+
 	// FFmpegEnabled toggles the ffmpeg-backed fallback for non-WAV audio.
 	// When true, unknown input formats are transcoded to 16 kHz mono WAV
 	// before transcription. When false, only WAV input is accepted.
@@ -117,6 +121,10 @@ func New(cfg Config) (*Server, error) {
 		return nil, err
 	}
 
+	if cfg.ModelPrecision != "int8" && cfg.ModelPrecision != "fp32" {
+		return nil, fmt.Errorf("invalid model precision %q: must be int8 or fp32", cfg.ModelPrecision)
+	}
+
 	converter := audio.NewConverter(audio.FFmpegConfig{
 		Enabled:    cfg.FFmpegEnabled,
 		BinaryPath: cfg.FFmpegPath,
@@ -124,7 +132,12 @@ func New(cfg Config) (*Server, error) {
 	})
 
 	// Initialize transcriber
-	transcriber, err := asr.NewTranscriber(cfg.ModelsDir, cfg.Workers, asr.Options{
+	asrDir := filepath.Join(cfg.ModelsDir, "asr", cfg.ModelPrecision)
+	vadPath := cfg.VADModelPath
+	if vadPath == "" {
+		vadPath = filepath.Join(cfg.ModelsDir, "vad", "silero_vad.onnx")
+	}
+	transcriber, err := asr.NewTranscriber(asrDir, cfg.Workers, asr.Options{
 		FFmpeg: converter,
 		GPU: asr.GPUConfig{
 			Provider: provider,
@@ -138,7 +151,7 @@ func New(cfg Config) (*Server, error) {
 		Boundary: asr.BoundaryConfig{
 			DisableVAD:   cfg.DisableVADBasedChunking,
 			DisableMel:   cfg.DisableMelBasedChunking,
-			VADModelPath: cfg.VADModelPath,
+			VADModelPath: vadPath,
 		},
 	})
 	if err != nil {
@@ -150,7 +163,7 @@ func New(cfg Config) (*Server, error) {
 	// deployments do not need the extra model.
 	var diarizer *diarization.Diarizer
 	if cfg.EnableDiarization {
-		d, err := diarization.New(filepath.Join(cfg.ModelsDir, "diarization"), cfg.Workers)
+		d, err := diarization.New(filepath.Join(cfg.ModelsDir, "diarization", cfg.ModelPrecision), cfg.Workers)
 		if err != nil {
 			transcriber.Close()
 			return nil, fmt.Errorf("failed to initialize diarizer: %w", err)

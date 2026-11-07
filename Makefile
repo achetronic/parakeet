@@ -25,7 +25,8 @@ MODELS_DIR := ./models
 
 .PHONY: all build clean test fmt vet lint run help
 .PHONY: docker-build-int8 docker-build-fp32 docker-build-cuda docker-run-int8 docker-run-fp32 docker-run-cuda docker-push
-.PHONY: models models-int8 models-fp32 models-silero-vad models-diarization-int8 models-diarization-fp32
+.PHONY: model-download model-download-asr model-download-asr-int8 model-download-asr-fp32 model-download-vad model-download-diarization model-download-diarization-int8 model-download-diarization-fp32
+.PHONY: model-export-asr-venv model-export-asr model-build-oci-images model-push-oci-images
 .PHONY: release release-linux release-darwin release-windows
 .PHONY: deps-onnxruntime
 
@@ -44,14 +45,18 @@ all: build
 $(BIN_DIR):
 	@mkdir -p $(BIN_DIR)
 
+################################################################################
 ## Build targets
+################################################################################
 
 build: $(BIN_DIR) ## Build the binary
 	$(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME) .
 
 # NOTE: Static build (CGO_ENABLED=0) is not possible because onnxruntime_go requires CGO
 
+################################################################################
 ## Development targets
+################################################################################
 
 run: build ## Build and run the server
 	@if [ -z "$(ONNXRUNTIME_LIB)" ]; then \
@@ -70,7 +75,9 @@ run-dev: build ## Run with custom port for development
 clean: ## Remove build artifacts
 	rm -rf $(BIN_DIR)
 
+################################################################################
 ## Code quality targets
+################################################################################
 
 fmt: ## Format source code
 	$(GOFMT) -s -w .
@@ -87,7 +94,9 @@ test-coverage: ## Run tests with coverage
 	$(GOTEST) -v -coverprofile=coverage.out ./...
 	$(GOCMD) tool cover -html=coverage.out -o coverage.html
 
+################################################################################
 ## Dependency targets
+################################################################################
 
 deps: ## Download dependencies
 	$(GOMOD) download
@@ -112,75 +121,129 @@ deps-onnxruntime: ## Install ONNX Runtime library
 	rm -rf /tmp/onnxruntime.tgz /tmp/onnxruntime-linux-$$ARCH_NAME-$(ONNXRUNTIME_VERSION) && \
 	echo "ONNX Runtime installed to /usr/local/lib/"
 
+################################################################################
 ## Model targets
-# Models are downloaded from HuggingFace: https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx
-# ONNX conversion by Ivan Googol Stupakov (https://github.com/istupakov)
+################################################################################
+# Full model lifecycle in three stages: train (export assets), package (build
+# + push OCI images), and download (fetch prebuilt assets).
+
+### Training (export ONNX assets from checkpoints)
+# Each model family gets its own venv and export targets. asr is the only one
+# today; add vad/ or diarization/ under export/ and mirror these targets.
+EXPORT_PYTHON ?= export/venv/bin/python
+# Torch index for the export venv. cu126 matches a local GPU machine; CI
+# overrides it to the CPU wheel (export runs on CPU).
+PYTORCH_INDEX_URL ?= https://download.pytorch.org/whl/cu126
+
+model-export-asr-venv: ## Create the export venv with ASR dependencies
+	@uv venv --python 3.12 export/venv
+	@uv pip install --python export/venv/bin/python torch torchaudio --index-url $(PYTORCH_INDEX_URL)
+	@uv pip install --python export/venv/bin/python -r export/asr/requirements.txt
+
+model-export-asr: ## Regenerate ASR ONNX assets from the NVIDIA checkpoint
+	@test -x $(EXPORT_PYTHON) || (echo "export venv missing, run: make model-export-asr-venv" && exit 1)
+	@$(EXPORT_PYTHON) export/asr/export.py --out export/asr/assets
+	@echo "Assets written to export/asr/assets/"
+
+### Package (build + publish OCI model images)
+# The model images carry the ASR encoder+decoder split (int8/fp32). They are
+# ASR-specific for now; a future family gets its own image targets if needed.
+MODEL_IMAGE_REPO ?= ghcr.io/achetronic/parakeet-models-asr
+MODEL_TAG ?= latest
+
+model-build-oci-images: model-export-asr ## Build int8 + fp32 model images locally (no push)
+	@./export/asr/build-image.sh int8 "$(MODEL_IMAGE_REPO)-int8" "$(MODEL_TAG)"
+	@./export/asr/build-image.sh fp32 "$(MODEL_IMAGE_REPO)-fp32" "$(MODEL_TAG)"
+
+model-push-oci-images: model-export-asr ## Build and push int8 + fp32 model images to GHCR
+	@./export/asr/build-image.sh int8 "$(MODEL_IMAGE_REPO)-int8" "$(MODEL_TAG)" --push
+	@./export/asr/build-image.sh fp32 "$(MODEL_IMAGE_REPO)-fp32" "$(MODEL_TAG)" --push
+
+### Download (fetch prebuilt models)
+# models/ is organized by model family first, precision second:
+#   models/asr/{int8,fp32}, models/vad, models/diarization/{int8,fp32}.
+# VAD has no precision. model-download pulls everything.
+
+# ASR encoder + decoder assets. Default to the community conversion; point
+# MODELS_REPO at your own repo to self-host (see export/README.md).
+MODELS_REPO ?= istupakov/parakeet-tdt-0.6b-v3-onnx
+MODELS_ASR_INT8_DIR := $(MODELS_DIR)/asr/int8
+MODELS_ASR_FP32_DIR := $(MODELS_DIR)/asr/fp32
+MODELS_VAD_DIR := $(MODELS_DIR)/vad
+
+model-download: model-download-asr model-download-vad model-download-diarization ## Download every model (ASR, VAD, diarization, both precisions)
+
+model-download-asr: model-download-asr-int8 model-download-asr-fp32 ## Download ASR models (int8 + fp32)
+
+model-download-asr-int8: ## Download ASR int8 models (~670MB)
+	@mkdir -p $(MODELS_ASR_INT8_DIR)
+	@echo "Downloading Parakeet TDT int8 models from https://huggingface.co/$(MODELS_REPO) ..."
+	@curl -L -o $(MODELS_ASR_INT8_DIR)/config.json "https://huggingface.co/$(MODELS_REPO)/resolve/main/config.json"
+	@curl -L -o $(MODELS_ASR_INT8_DIR)/vocab.txt "https://huggingface.co/$(MODELS_REPO)/resolve/main/vocab.txt"
+	@curl -L -o $(MODELS_ASR_INT8_DIR)/nemo128.onnx "https://huggingface.co/$(MODELS_REPO)/resolve/main/nemo128.onnx"
+	@curl -L -o $(MODELS_ASR_INT8_DIR)/encoder-model.int8.onnx "https://huggingface.co/$(MODELS_REPO)/resolve/main/encoder-model.int8.onnx"
+	@curl -L -o $(MODELS_ASR_INT8_DIR)/decoder_joint-model.int8.onnx "https://huggingface.co/$(MODELS_REPO)/resolve/main/decoder_joint-model.int8.onnx"
+	@echo "ASR int8 models downloaded to $(MODELS_ASR_INT8_DIR)"
+
+model-download-asr-fp32: ## Download ASR fp32 models (~2.5GB)
+	@mkdir -p $(MODELS_ASR_FP32_DIR)
+	@echo "Downloading Parakeet TDT fp32 models from https://huggingface.co/$(MODELS_REPO) ..."
+	@curl -L -o $(MODELS_ASR_FP32_DIR)/config.json "https://huggingface.co/$(MODELS_REPO)/resolve/main/config.json"
+	@curl -L -o $(MODELS_ASR_FP32_DIR)/vocab.txt "https://huggingface.co/$(MODELS_REPO)/resolve/main/vocab.txt"
+	@curl -L -o $(MODELS_ASR_FP32_DIR)/nemo128.onnx "https://huggingface.co/$(MODELS_REPO)/resolve/main/nemo128.onnx"
+	@curl -L -o $(MODELS_ASR_FP32_DIR)/encoder-model.onnx "https://huggingface.co/$(MODELS_REPO)/resolve/main/encoder-model.onnx"
+	@curl -L -o $(MODELS_ASR_FP32_DIR)/encoder-model.onnx.data "https://huggingface.co/$(MODELS_REPO)/resolve/main/encoder-model.onnx.data"
+	@curl -L -o $(MODELS_ASR_FP32_DIR)/decoder_joint-model.onnx "https://huggingface.co/$(MODELS_REPO)/resolve/main/decoder_joint-model.onnx"
+	@echo "ASR fp32 models downloaded to $(MODELS_ASR_FP32_DIR)"
 
 # Silero VAD model for chunk-boundary selection (long-audio mode). Pinned to a
 # specific release tag and sha256 so the download is reproducible and verified.
 # snakers4/silero-vad is MIT licensed. NOTE: at v6.2.1 the ONNX file lives at
 # src/silero_vad/data/silero_vad.onnx (the older files/silero_vad.onnx path is
-# gone), so the URL points there.
+# gone), so the URL points there. VAD is precision-independent, so it lives
+# directly under models/vad/.
 SILERO_VAD_VERSION ?= v6.2.1
 SILERO_VAD_SHA256 ?= 1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3
 SILERO_VAD_URL := https://github.com/snakers4/silero-vad/raw/$(SILERO_VAD_VERSION)/src/silero_vad/data/silero_vad.onnx
 
-models: models-int8 ## Download models (default: int8)
-
-models-silero-vad: ## Download and verify the Silero VAD model (MIT)
-	@mkdir -p $(MODELS_DIR)
+model-download-vad: ## Download and verify the Silero VAD model (MIT)
+	@mkdir -p $(MODELS_VAD_DIR)
 	@echo "Downloading Silero VAD $(SILERO_VAD_VERSION) (MIT) ..."
-	@curl -L -o $(MODELS_DIR)/silero_vad.onnx "$(SILERO_VAD_URL)"
-	@echo "$(SILERO_VAD_SHA256)  $(MODELS_DIR)/silero_vad.onnx" | sha256sum -c -
+	@curl -L -o $(MODELS_VAD_DIR)/silero_vad.onnx "$(SILERO_VAD_URL)"
+	@echo "$(SILERO_VAD_SHA256)  $(MODELS_VAD_DIR)/silero_vad.onnx" | sha256sum -c -
 	@echo "Silero VAD model verified"
 
-models-int8: models-silero-vad models-diarization-int8 ## Download int8 quantized models (~670MB)
-	@mkdir -p $(MODELS_DIR)
-	@echo "Downloading Parakeet TDT int8 models from https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx ..."
-	@curl -L -o $(MODELS_DIR)/config.json "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/config.json"
-	@curl -L -o $(MODELS_DIR)/vocab.txt "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/vocab.txt"
-	@curl -L -o $(MODELS_DIR)/nemo128.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/nemo128.onnx"
-	@curl -L -o $(MODELS_DIR)/encoder-model.int8.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/encoder-model.int8.onnx"
-	@curl -L -o $(MODELS_DIR)/decoder_joint-model.int8.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/decoder_joint-model.int8.onnx"
-	@echo "Models downloaded to $(MODELS_DIR)"
-
-models-fp32: models-silero-vad models-diarization-fp32 ## Download fp32 full precision models (~2.5GB)
-	@mkdir -p $(MODELS_DIR)
-	@echo "Downloading Parakeet TDT fp32 models from https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx ..."
-	@curl -L -o $(MODELS_DIR)/config.json "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/config.json"
-	@curl -L -o $(MODELS_DIR)/vocab.txt "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/vocab.txt"
-	@curl -L -o $(MODELS_DIR)/nemo128.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/nemo128.onnx"
-	@curl -L -o $(MODELS_DIR)/encoder-model.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/encoder-model.onnx"
-	@curl -L -o $(MODELS_DIR)/encoder-model.onnx.data "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/encoder-model.onnx.data"
-	@curl -L -o $(MODELS_DIR)/decoder_joint-model.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/decoder_joint-model.onnx"
-	@echo "Models downloaded to $(MODELS_DIR)"
-
-# .onnx + .onnx_data must stay together (external weights, relative path); subdir
-# avoids clobbering Parakeet's config.json at models/. Ref: https://huggingface.co/onnx-community/Nemotron-3-Diarization-ONNX
+# .onnx + .onnx_data must stay together (external weights, relative path). Ref:
+# https://huggingface.co/onnx-community/Nemotron-3-Diarization-ONNX
 DIARIZATION_REPO := onnx-community/Nemotron-3-Diarization-ONNX
-DIARIZATION_DIR := $(MODELS_DIR)/diarization
+DIARIZATION_INT8_DIR := $(MODELS_DIR)/diarization/int8
+DIARIZATION_FP32_DIR := $(MODELS_DIR)/diarization/fp32
 
-models-diarization-int8: ## Download int8-quantized diarization model (~120MB)
-	@mkdir -p $(DIARIZATION_DIR)
+model-download-diarization: model-download-diarization-int8 model-download-diarization-fp32 ## Download diarization models (int8 + fp32)
+
+model-download-diarization-int8: ## Download int8 diarization model (~120MB)
+	@mkdir -p $(DIARIZATION_INT8_DIR)
 	@echo "Downloading Nemotron-3-Diarization int8 model from https://huggingface.co/$(DIARIZATION_REPO) ..."
-	@curl -L -o $(DIARIZATION_DIR)/config.json "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/config.json"
-	@curl -L -o $(DIARIZATION_DIR)/preprocessor_config.json "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/preprocessor_config.json"
-	@curl -L -o $(DIARIZATION_DIR)/processor_config.json "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/processor_config.json"
-	@curl -L -o $(DIARIZATION_DIR)/model_quantized.onnx "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/onnx/model_quantized.onnx"
-	@curl -L -o $(DIARIZATION_DIR)/model_quantized.onnx_data "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/onnx/model_quantized.onnx_data"
-	@echo "Diarization model downloaded to $(DIARIZATION_DIR)"
+	@curl -L -o $(DIARIZATION_INT8_DIR)/config.json "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/config.json"
+	@curl -L -o $(DIARIZATION_INT8_DIR)/preprocessor_config.json "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/preprocessor_config.json"
+	@curl -L -o $(DIARIZATION_INT8_DIR)/processor_config.json "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/processor_config.json"
+	@curl -L -o $(DIARIZATION_INT8_DIR)/model_quantized.onnx "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/onnx/model_quantized.onnx"
+	@curl -L -o $(DIARIZATION_INT8_DIR)/model_quantized.onnx_data "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/onnx/model_quantized.onnx_data"
+	@echo "Diarization int8 model downloaded to $(DIARIZATION_INT8_DIR)"
 
-models-diarization-fp32: ## Download fp32 diarization model (~400MB)
-	@mkdir -p $(DIARIZATION_DIR)
+model-download-diarization-fp32: ## Download fp32 diarization model (~400MB)
+	@mkdir -p $(DIARIZATION_FP32_DIR)
 	@echo "Downloading Nemotron-3-Diarization fp32 model from https://huggingface.co/$(DIARIZATION_REPO) ..."
-	@curl -L -o $(DIARIZATION_DIR)/config.json "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/config.json"
-	@curl -L -o $(DIARIZATION_DIR)/preprocessor_config.json "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/preprocessor_config.json"
-	@curl -L -o $(DIARIZATION_DIR)/processor_config.json "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/processor_config.json"
-	@curl -L -o $(DIARIZATION_DIR)/model.onnx "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/onnx/model.onnx"
-	@curl -L -o $(DIARIZATION_DIR)/model.onnx_data "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/onnx/model.onnx_data"
-	@echo "Diarization model downloaded to $(DIARIZATION_DIR)"
+	@curl -L -o $(DIARIZATION_FP32_DIR)/config.json "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/config.json"
+	@curl -L -o $(DIARIZATION_FP32_DIR)/preprocessor_config.json "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/preprocessor_config.json"
+	@curl -L -o $(DIARIZATION_FP32_DIR)/processor_config.json "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/processor_config.json"
+	@curl -L -o $(DIARIZATION_FP32_DIR)/model.onnx "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/onnx/model.onnx"
+	@curl -L -o $(DIARIZATION_FP32_DIR)/model.onnx_data "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/onnx/model.onnx_data"
+	@echo "Diarization fp32 model downloaded to $(DIARIZATION_FP32_DIR)"
 
+################################################################################
 ## Docker targets
+################################################################################
 
 docker-build-int8: ## Build Docker image with embedded int8 models (~670MB)
 	docker build --build-arg MODEL_PRECISION=int8 -t $(DOCKER_IMAGE):$(DOCKER_TAG)-int8 .
@@ -209,7 +272,9 @@ docker-push: ## Push Docker images to registry
 	docker push $(DOCKER_IMAGE):latest-int8
 	docker push $(DOCKER_IMAGE):latest-fp32
 
+################################################################################
 ## Release targets
+################################################################################
 
 release: $(BIN_DIR) release-linux release-darwin release-windows ## Build release binaries for all platforms
 
@@ -224,7 +289,9 @@ release-darwin: $(BIN_DIR) ## Build macOS binaries
 release-windows: $(BIN_DIR) ## Build Windows binary
 	GOOS=windows GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME)-windows-amd64.exe .
 
+################################################################################
 ## Help target
+################################################################################
 
 help: ## Show this help message
 	@echo "Parakeet ASR Server - Makefile targets"
@@ -253,12 +320,18 @@ help: ## Show this help message
 	@echo "  \033[36mdeps-onnxruntime\033[0m    Install ONNX Runtime library (requires sudo)"
 	@echo ""
 	@echo "\033[1mModels:\033[0m"
-	@echo "  \033[36mmodels\033[0m              Download models (default: int8)"
-	@echo "  \033[36mmodels-int8\033[0m         Download int8 quantized models (~670MB)"
-	@echo "  \033[36mmodels-fp32\033[0m         Download fp32 full precision models (~2.5GB)"
-	@echo "  \033[36mmodels-silero-vad\033[0m   Download and verify the Silero VAD model (MIT)"
-	@echo "  \033[36mmodels-diarization-int8\033[0m   Download int8 diarization model (~120MB)"
-	@echo "  \033[36mmodels-diarization-fp32\033[0m   Download fp32 diarization model (~400MB)"
+	@echo "  \033[36mmodel-export-asr-venv\033[0m  Create the export venv with ASR deps"
+	@echo "  \033[36mmodel-export-asr\033[0m  Regenerate ASR ONNX assets from the NVIDIA checkpoint"
+	@echo "  \033[36mmodel-build-oci-images\033[0m  Build int8 + fp32 model images locally"
+	@echo "  \033[36mmodel-push-oci-images\033[0m  Build and push int8 + fp32 model images to GHCR"
+	@echo "  \033[36mmodel-download\033[0m  Download every model (ASR + VAD + diarization, both precisions)"
+	@echo "  \033[36mmodel-download-asr\033[0m  Download ASR models (int8 + fp32)"
+	@echo "  \033[36mmodel-download-asr-int8\033[0m  Download ASR int8 models (~670MB)"
+	@echo "  \033[36mmodel-download-asr-fp32\033[0m  Download ASR fp32 models (~2.5GB)"
+	@echo "  \033[36mmodel-download-vad\033[0m  Download and verify the Silero VAD model (MIT)"
+	@echo "  \033[36mmodel-download-diarization\033[0m  Download diarization models (int8 + fp32)"
+	@echo "  \033[36mmodel-download-diarization-int8\033[0m  Download int8 diarization model (~120MB)"
+	@echo "  \033[36mmodel-download-diarization-fp32\033[0m  Download fp32 diarization model (~400MB)"
 	@echo ""
 	@echo "\033[1mDocker:\033[0m"
 	@echo "  \033[36mdocker-build-int8\033[0m   Build Docker image with int8 models"

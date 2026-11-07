@@ -1,0 +1,4 @@
+# Storage image. Ships the ONNX assets as OCI layers. Extract them with
+# docker cp or a bind mount; it is not an application image.
+FROM alpine:3.20
+COPY . /models

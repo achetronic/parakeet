@@ -1,0 +1,14 @@
+# Large generated artifacts; never versioned.
+checkpoint/
+assets/
+venv/
+.image/
+
+# Generated ONNX assets travel as OCI images, not git.
+*.onnx
+*.onnx.data
+manifest.txt
+
+# Python and logs.
+__pycache__/
+*.log
