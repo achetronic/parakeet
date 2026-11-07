@@ -1,9 +1,13 @@
-# Checkpoint y assets son grandes; no se versionan.
+# Large generated artifacts; never versioned.
 checkpoint/
 assets/
 venv/
 
-# Los ONNX generados se suben a HF, no a git.
+# Generated ONNX assets go to HuggingFace, not git.
 *.onnx
 *.onnx.data
-manifest.txt*.log
+manifest.txt
+
+# Python and logs.
+__pycache__/
+*.log

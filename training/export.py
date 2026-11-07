@@ -1,52 +1,43 @@
 #!/usr/bin/env python3
-"""Export every ONNX asset the Parakeet server needs, straight from the NVIDIA
-checkpoint, so we no longer depend on third-party conversions.
+"""Regenerate every ONNX asset the Parakeet server needs, from the NVIDIA checkpoint.
 
-Produces, into --out/ (default training/assets/):
+Writes to --out (default training/assets):
 
-    config.json                     model config (tiny, generated)
-    vocab.txt                       SentencePiece vocab + <blk> blank (8193 lines)
-    nemo128.onnx                    mel preprocessor (test reference)
-    encoder-model.onnx(.data)       fp32 encoder, FULL attention
-    encoder-model.int8.onnx          int8 encoder, FULL attention
-    encoder-local.onnx(.data)       fp32 encoder, LOCAL attention (rel_pos_local_attn)
-    encoder-local.int8.onnx          int8 encoder, LOCAL attention
-    decoder_joint-model.onnx         fp32 decoder + joint
-    decoder_joint-model.int8.onnx     int8 decoder + joint
-    manifest.txt                    sha256 of every artifact
+    config.json                  model config (generated)
+    vocab.txt                    SentencePiece vocab + <blk> blank (8193 lines)
+    nemo128.onnx                 mel preprocessor (test reference only)
+    encoder-model.onnx(.data)    fp32 encoder, full attention
+    encoder-model.int8.onnx      int8 encoder, full attention
+    encoder-local.onnx(.data)    fp32 encoder, local attention (rel_pos_local_attn)
+    encoder-local.int8.onnx      int8 encoder, local attention
+    decoder_joint-model.onnx     fp32 decoder + joint
+    decoder_joint-model.int8.onnx  int8 decoder + joint
+    manifest.txt                 sha256 of every artifact
 
-The only external dependency is the NVIDIA checkpoint:
+The only external dependency is the checkpoint. It is downloaded if missing:
 
     https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3/resolve/main/parakeet-tdt-0.6b-v3.nemo
 
-Run from the repo root with the training venv active (see training/requirements.txt):
-
-    python training/export.py --checkpoint training/checkpoint/parakeet-tdt-0.6b-v3.nemo --out training/assets
-
-Why the local-attention forward is patched:
-    NeMo 3.0 exports RelPositionMultiHeadAttentionLongformer through its
-    sliding-chunks path, which reconstructs the attention band with
-    `new_empty(...)` plus in-place slice assignments. The torchscript exporter
-    mis-compiles those and the encoder outputs garbage. We replace the forward
-    with an equivalent full-attention + band-mask implementation that uses only
-    export-safe ops. See DESIGN_DECISIONS.md for the full story.
+The local-attention forward is patched because NeMo 3.0 exports it wrong. Its
+sliding-chunks path rebuilds the attention band with new_empty() plus in-place
+slice assignments, which the torchscript exporter mis-compiles. The patch swaps
+in a full-attention + band-mask forward that uses only export-safe ops.
 """
 
 import argparse
-import hashlib
-import os
 import glob
+import hashlib
+import json
+import os
 import shutil
-import sys
+import subprocess
 import tempfile
 
-import numpy as np
 import onnx
-import onnxruntime as ort
 import torch
 import torch.nn.functional as F
 
-from onnxruntime.quantization import quantize_dynamic, QuantType
+from onnxruntime.quantization import QuantType, quantize_dynamic
 
 CHECKPOINT_URL = (
     "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3/resolve/main/"
@@ -54,14 +45,12 @@ CHECKPOINT_URL = (
 )
 DEFAULT_CHECKPOINT = "training/checkpoint/parakeet-tdt-0.6b-v3.nemo"
 
-# Weight params of the shipped model. Keep in sync with models/config.json.
+# Keep in sync with models/config.json.
 CONFIG = {
     "model_type": "nemo-conformer-tdt",
     "features_size": 128,
     "subsampling_factor": 8,
 }
-
-FLAG = 0
 
 
 def log(msg):
@@ -79,15 +68,11 @@ def sha256(path):
 def download_checkpoint(dest):
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     if os.path.exists(dest):
-        log(f"checkpoint ya existe: {dest}")
+        log(f"checkpoint already present: {dest}")
         return dest
-    log(f"descargando checkpoint -> {dest}")
+    log(f"downloading checkpoint -> {dest}")
     tmp = dest + ".part"
-    import subprocess
-
-    subprocess.run(
-        ["curl", "-L", "-o", tmp, CHECKPOINT_URL], check=True
-    )
+    subprocess.run(["curl", "-L", "-o", tmp, CHECKPOINT_URL], check=True)
     os.rename(tmp, dest)
     return dest
 
@@ -95,7 +80,7 @@ def download_checkpoint(dest):
 def load_model(checkpoint):
     import nemo.collections.asr.models as M
 
-    log("cargando checkpoint en NeMo (cpu)...")
+    log("loading checkpoint into NeMo (cpu)...")
     m = M.EncDecRNNTBPEModel.restore_from(checkpoint, map_location="cpu")
     m.eval()
     return m
@@ -103,26 +88,24 @@ def load_model(checkpoint):
 
 def export_vocab(model, out):
     path = os.path.join(out, "vocab.txt")
-    vocab = model.tokenizer.vocab  # list of 8192 tokens in ID order
+    vocab = model.tokenizer.vocab  # 8192 tokens in ID order
     with open(path, "w", encoding="utf-8") as f:
         for i, tok in enumerate(vocab):
             f.write(f"{tok} {i}\n")
         f.write(f"<blk> {len(vocab)}\n")
-    log(f"vocab.txt ({len(vocab) + 1} lineas)")
+    log(f"vocab.txt ({len(vocab) + 1} lines)")
 
 
 def export_config(out):
-    import json
-
     with open(os.path.join(out, "config.json"), "w") as f:
         json.dump(CONFIG, f, indent=4)
 
 
 def export_preprocessor(model, out):
-    log("exportando nemo128.onnx (preprocessor)...")
-    # nemo128.onnx es solo una referencia de tests (no lo carga el servidor).
-    # torch.stft devuelve complex en torch>=2.x y el exportador torchscript no lo
-    # traza; lo dejamos best-effort y seguimos con el resto.
+    log("exporting nemo128.onnx (preprocessor)...")
+    # Test reference only; the server does not load it. torch.stft returns
+    # complex in torch>=2.x, which torchscript cannot trace, so this is
+    # best-effort.
     try:
         pre = model.preprocessor
 
@@ -151,11 +134,11 @@ def export_preprocessor(model, out):
         )
         log("nemo128.onnx OK")
     except Exception as e:
-        log(f"AVISO: nemo128.onnx no exportable (STFT complejo): {type(e).__name__}")
+        log(f"warning: nemo128.onnx not exportable (complex STFT): {type(e).__name__}")
 
 
 def patch_local_attention():
-    """Replace the sliding-chunks forward with an export-safe band-mask one."""
+    """Swap the sliding-chunks forward for an export-safe band-mask one."""
     import nemo.collections.asr.parts.submodules.multi_head_attention as mha
 
     def forward_local(self, query, key, value, pad_mask, pos_emb, cache=None):
@@ -192,7 +175,7 @@ def patch_local_attention():
 
 
 def consolidate_external_data(src_onnx, dst_onnx):
-    """Fold any scattered external weights into one .onnx + one .data sidecar."""
+    """Fold scattered external weights into one .onnx + one .data sidecar."""
     model = onnx.load(src_onnx, load_external_data=True)
     data_path = dst_onnx + ".data"
     if os.path.exists(data_path):
@@ -205,8 +188,6 @@ def consolidate_external_data(src_onnx, dst_onnx):
         location=os.path.basename(data_path),
         size_threshold=1024,
     )
-    # onnx.save_model writes the .data next to the .onnx under its own naming
-    written = dst_onnx
     log(f"  fp32 -> {os.path.basename(dst_onnx)} (+external data)")
 
 
@@ -222,7 +203,7 @@ def quantize(src_onnx, dst_onnx):
 
 def export_encoder(model, out, local_attention, att_context=(256, 256)):
     tag = "local" if local_attention else "full"
-    log(f"exportando encoder ({tag} attention)...")
+    log(f"exporting encoder ({tag} attention)...")
 
     if local_attention:
         patch_local_attention()
@@ -242,7 +223,7 @@ def export_encoder(model, out, local_attention, att_context=(256, 256)):
         consolidate_external_data(enc, fp32_dst)
         quantize(fp32_dst, os.path.join(out, prefix + ".int8.onnx"))
 
-        # keep the decoder from this run (identical across attention modes)
+        # Decoder is identical across attention modes; keep one copy.
         dec_dst = os.path.join(out, "decoder_joint-model.onnx")
         shutil.copy(dec, dec_dst)
         quantize(dec, os.path.join(out, "decoder_joint-model.int8.onnx"))
@@ -250,9 +231,7 @@ def export_encoder(model, out, local_attention, att_context=(256, 256)):
 
 
 def write_manifest(out):
-    paths = sorted(
-        p for p in os.listdir(out) if os.path.isfile(os.path.join(out, p))
-    )
+    paths = sorted(p for p in os.listdir(out) if os.path.isfile(os.path.join(out, p)))
     with open(os.path.join(out, "manifest.txt"), "w") as f:
         for p in paths:
             if p == "manifest.txt":
@@ -279,12 +258,11 @@ def main():
     export_config(args.out)
     export_preprocessor(model, args.out)
 
-    # Full attention (current server default), then local attention.
     export_encoder(model, args.out, local_attention=False)
     export_encoder(model, args.out, local_attention=True)
 
     write_manifest(args.out)
-    log(f"listo. assets en {args.out}")
+    log(f"done. assets in {args.out}")
 
 
 if __name__ == "__main__":
