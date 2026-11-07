@@ -10,11 +10,9 @@ output too.
 
 ```
 training/
-├── asr/               ASR export script + assets (future: vad/, diarization/)
+├── asr/               export.py + Dockerfile.models + build-image.sh + assets/
 ├── checkpoint/        .nemo checkpoint, gitignored
 ├── venv/              training environment, gitignored
-├── Dockerfile.models  OCI storage image
-├── build-image.sh     builds + pushes the model images
 └── requirements.txt
 ```
 
@@ -22,18 +20,18 @@ training/
 
 Written to `training/asr/assets/`:
 
-| file | what |
-| --- | --- |
-| `config.json` | model config |
-| `vocab.txt` | SentencePiece vocab + `<blk>` blank, 8193 lines |
-| `nemo128.onnx` | mel preprocessor, test reference only |
-| `encoder-model.onnx` + `.data` | fp32 encoder, full attention |
-| `encoder-model.int8.onnx` | int8 encoder, full attention |
-| `encoder-local.onnx` + `.data` | fp32 encoder, local attention (`rel_pos_local_attn`) |
-| `encoder-local.int8.onnx` | int8 encoder, local attention |
-| `decoder_joint-model.onnx` | fp32 decoder + joint |
-| `decoder_joint-model.int8.onnx` | int8 decoder + joint |
-| `manifest.txt` | sha256 of every artifact |
+| file                            | what                                                 |
+| ------------------------------- | ---------------------------------------------------- |
+| `config.json`                   | model config                                         |
+| `vocab.txt`                     | SentencePiece vocab + `<blk>` blank, 8193 lines      |
+| `nemo128.onnx`                  | mel preprocessor, test reference only                |
+| `encoder-model.onnx` + `.data`  | fp32 encoder, full attention                         |
+| `encoder-model.int8.onnx`       | int8 encoder, full attention                         |
+| `encoder-local.onnx` + `.data`  | fp32 encoder, local attention (`rel_pos_local_attn`) |
+| `encoder-local.int8.onnx`       | int8 encoder, local attention                        |
+| `decoder_joint-model.onnx`      | fp32 decoder + joint                                 |
+| `decoder_joint-model.int8.onnx` | int8 decoder + joint                                 |
+| `manifest.txt`                  | sha256 of every artifact                             |
 
 ## Requirements
 
@@ -72,8 +70,8 @@ training/venv/bin/python training/asr/export.py \
 The assets are shipped as OCI images on GitHub Container Registry. Two images,
 each with both attention modes inside:
 
-| image | contents |
-| --- | --- |
+| image                                     | contents                        |
+| ----------------------------------------- | ------------------------------- |
 | `ghcr.io/achetronic/parakeet-models-int8` | int8 encoders + decoder + vocab |
 | `ghcr.io/achetronic/parakeet-models-fp32` | fp32 encoders + decoder + vocab |
 

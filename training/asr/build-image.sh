@@ -9,7 +9,7 @@ image=$2
 tag=$3
 push=${4:-}
 
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 assets="$root/training/asr/assets"
 stage="$root/training/.image/$mode"
 
@@ -39,7 +39,7 @@ case "$mode" in
     ;;
 esac
 
-docker build -f "$root/training/Dockerfile.models" -t "$image:$tag" "$stage"
+docker build -f "$root/training/asr/Dockerfile.models" -t "$image:$tag" "$stage"
 
 if [ "$push" = "--push" ]; then
   docker push "$image:$tag"

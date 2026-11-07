@@ -48,5 +48,5 @@ jobs:
           IMG: ghcr.io/${{ github.repository_owner }}/parakeet-models
           TAG: ${{ github.event.inputs.tag || 'latest' }}
         run: |
-          ./training/build-image.sh int8  "$IMG-int8"  "$TAG" --push
-          ./training/build-image.sh fp32 "$IMG-fp32" "$TAG" --push
+          ./training/asr/build-image.sh int8  "$IMG-int8"  "$TAG" --push
+          ./training/asr/build-image.sh fp32 "$IMG-fp32" "$TAG" --push

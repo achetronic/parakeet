@@ -173,12 +173,12 @@ model-training-venv: ## Create the training venv (Python 3.12 + nemo_toolkit)
 	@uv pip install --python training/venv/bin/python -r training/requirements.txt
 
 model-image: model-training ## Build int8 + fp32 model images locally (no push)
-	@./training/build-image.sh int8 "$(MODEL_IMAGE_REPO)-int8" "$(MODEL_TAG)"
-	@./training/build-image.sh fp32 "$(MODEL_IMAGE_REPO)-fp32" "$(MODEL_TAG)"
+	@./training/asr/build-image.sh int8 "$(MODEL_IMAGE_REPO)-int8" "$(MODEL_TAG)"
+	@./training/asr/build-image.sh fp32 "$(MODEL_IMAGE_REPO)-fp32" "$(MODEL_TAG)"
 
 model-push: model-training ## Build and push int8 + fp32 model images to GHCR
-	@./training/build-image.sh int8 "$(MODEL_IMAGE_REPO)-int8" "$(MODEL_TAG)" --push
-	@./training/build-image.sh fp32 "$(MODEL_IMAGE_REPO)-fp32" "$(MODEL_TAG)" --push
+	@./training/asr/build-image.sh int8 "$(MODEL_IMAGE_REPO)-int8" "$(MODEL_TAG)" --push
+	@./training/asr/build-image.sh fp32 "$(MODEL_IMAGE_REPO)-fp32" "$(MODEL_TAG)" --push
 
 # .onnx + .onnx_data must stay together (external weights, relative path); subdir
 # avoids clobbering Parakeet's config.json at models/. Ref: https://huggingface.co/onnx-community/Nemotron-3-Diarization-ONNX
