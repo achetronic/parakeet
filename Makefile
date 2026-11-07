@@ -25,7 +25,7 @@ MODELS_DIR := ./models
 
 .PHONY: all build clean test fmt vet lint run help
 .PHONY: docker-build-int8 docker-build-fp32 docker-build-cuda docker-run-int8 docker-run-fp32 docker-run-cuda docker-push
-.PHONY: models models-int8 models-fp32 models-silero-vad models-diarization-int8 models-diarization-fp32
+.PHONY: models models-int8 models-fp32 models-silero-vad models-diarization-int8 models-diarization-fp32 training-export
 .PHONY: release release-linux release-darwin release-windows
 .PHONY: deps-onnxruntime
 
@@ -113,8 +113,9 @@ deps-onnxruntime: ## Install ONNX Runtime library
 	echo "ONNX Runtime installed to /usr/local/lib/"
 
 ## Model targets
-# Models are downloaded from HuggingFace: https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx
-# ONNX conversion by Ivan Googol Stupakov (https://github.com/istupakov)
+# ASR encoder + decoder assets. Default to the community conversion; point
+# MODELS_REPO at your own HuggingFace repo to self-host (see training/README.md).
+MODELS_REPO ?= istupakov/parakeet-tdt-0.6b-v3-onnx
 
 # Silero VAD model for chunk-boundary selection (long-audio mode). Pinned to a
 # specific release tag and sha256 so the download is reproducible and verified.
@@ -136,24 +137,28 @@ models-silero-vad: ## Download and verify the Silero VAD model (MIT)
 
 models-int8: models-silero-vad models-diarization-int8 ## Download int8 quantized models (~670MB)
 	@mkdir -p $(MODELS_DIR)
-	@echo "Downloading Parakeet TDT int8 models from https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx ..."
-	@curl -L -o $(MODELS_DIR)/config.json "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/config.json"
-	@curl -L -o $(MODELS_DIR)/vocab.txt "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/vocab.txt"
-	@curl -L -o $(MODELS_DIR)/nemo128.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/nemo128.onnx"
-	@curl -L -o $(MODELS_DIR)/encoder-model.int8.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/encoder-model.int8.onnx"
-	@curl -L -o $(MODELS_DIR)/decoder_joint-model.int8.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/decoder_joint-model.int8.onnx"
+	@echo "Downloading Parakeet TDT int8 models from https://huggingface.co/$(MODELS_REPO) ..."
+	@curl -L -o $(MODELS_DIR)/config.json "https://huggingface.co/$(MODELS_REPO)/resolve/main/config.json"
+	@curl -L -o $(MODELS_DIR)/vocab.txt "https://huggingface.co/$(MODELS_REPO)/resolve/main/vocab.txt"
+	@curl -L -o $(MODELS_DIR)/nemo128.onnx "https://huggingface.co/$(MODELS_REPO)/resolve/main/nemo128.onnx"
+	@curl -L -o $(MODELS_DIR)/encoder-model.int8.onnx "https://huggingface.co/$(MODELS_REPO)/resolve/main/encoder-model.int8.onnx"
+	@curl -L -o $(MODELS_DIR)/decoder_joint-model.int8.onnx "https://huggingface.co/$(MODELS_REPO)/resolve/main/decoder_joint-model.int8.onnx"
 	@echo "Models downloaded to $(MODELS_DIR)"
 
 models-fp32: models-silero-vad models-diarization-fp32 ## Download fp32 full precision models (~2.5GB)
 	@mkdir -p $(MODELS_DIR)
-	@echo "Downloading Parakeet TDT fp32 models from https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx ..."
-	@curl -L -o $(MODELS_DIR)/config.json "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/config.json"
-	@curl -L -o $(MODELS_DIR)/vocab.txt "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/vocab.txt"
-	@curl -L -o $(MODELS_DIR)/nemo128.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/nemo128.onnx"
-	@curl -L -o $(MODELS_DIR)/encoder-model.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/encoder-model.onnx"
-	@curl -L -o $(MODELS_DIR)/encoder-model.onnx.data "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/encoder-model.onnx.data"
-	@curl -L -o $(MODELS_DIR)/decoder_joint-model.onnx "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/decoder_joint-model.onnx"
+	@echo "Downloading Parakeet TDT fp32 models from https://huggingface.co/$(MODELS_REPO) ..."
+	@curl -L -o $(MODELS_DIR)/config.json "https://huggingface.co/$(MODELS_REPO)/resolve/main/config.json"
+	@curl -L -o $(MODELS_DIR)/vocab.txt "https://huggingface.co/$(MODELS_REPO)/resolve/main/vocab.txt"
+	@curl -L -o $(MODELS_DIR)/nemo128.onnx "https://huggingface.co/$(MODELS_REPO)/resolve/main/nemo128.onnx"
+	@curl -L -o $(MODELS_DIR)/encoder-model.onnx "https://huggingface.co/$(MODELS_REPO)/resolve/main/encoder-model.onnx"
+	@curl -L -o $(MODELS_DIR)/encoder-model.onnx.data "https://huggingface.co/$(MODELS_REPO)/resolve/main/encoder-model.onnx.data"
+	@curl -L -o $(MODELS_DIR)/decoder_joint-model.onnx "https://huggingface.co/$(MODELS_REPO)/resolve/main/decoder_joint-model.onnx"
 	@echo "Models downloaded to $(MODELS_DIR)"
+
+training-export: ## Generate ASR ONNX assets from the NVIDIA checkpoint (needs training/venv)
+	@python training/export.py --checkpoint training/checkpoint/parakeet-tdt-0.6b-v3.nemo --out training/assets
+	@echo "Assets generated in training/assets/ (upload via huggingface-cli, see training/README.md)"
 
 # .onnx + .onnx_data must stay together (external weights, relative path); subdir
 # avoids clobbering Parakeet's config.json at models/. Ref: https://huggingface.co/onnx-community/Nemotron-3-Diarization-ONNX

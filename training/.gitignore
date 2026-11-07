@@ -1,0 +1,9 @@
+# Checkpoint y assets son grandes; no se versionan.
+checkpoint/
+assets/
+venv/
+
+# Los ONNX generados se suben a HF, no a git.
+*.onnx
+*.onnx.data
+manifest.txt*.log
