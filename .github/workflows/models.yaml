@@ -34,7 +34,7 @@ jobs:
           uv pip install --python training/venv/bin/python -r training/requirements.txt
           training/venv/bin/python training/asr/export.py \
             --checkpoint training/checkpoint/parakeet-tdt-0.6b-v3.nemo \
-            --out training/assets
+            --out training/asr/assets
 
       - name: Log in to GHCR
         uses: docker/login-action@v3

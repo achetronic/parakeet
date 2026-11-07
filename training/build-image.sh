@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build a Parakeet model image from training/assets.
+# Build a Parakeet model image from training/asr/assets.
 # Usage: build-image.sh <int8|fp32> <image> <tag> [--push]
 
 mode=$1
@@ -10,7 +10,7 @@ tag=$3
 push=${4:-}
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-assets="$root/training/assets"
+assets="$root/training/asr/assets"
 stage="$root/training/.image/$mode"
 
 rm -rf "$root/training/.image"

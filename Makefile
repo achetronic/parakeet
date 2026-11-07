@@ -164,8 +164,8 @@ MODEL_TAG ?= latest
 
 model-training: ## Regenerate every ASR ONNX asset from the NVIDIA checkpoint
 	@test -x $(TRAINING_PYTHON) || (echo "training venv missing, run: make model-training-venv" && exit 1)
-	@$(TRAINING_PYTHON) training/asr/export.py --checkpoint training/checkpoint/parakeet-tdt-0.6b-v3.nemo --out training/assets
-	@echo "Assets written to training/assets/"
+	@$(TRAINING_PYTHON) training/asr/export.py --checkpoint training/checkpoint/parakeet-tdt-0.6b-v3.nemo --out training/asr/assets
+	@echo "Assets written to training/asr/assets/"
 
 model-training-venv: ## Create the training venv (Python 3.12 + nemo_toolkit)
 	@uv venv --python 3.12 training/venv

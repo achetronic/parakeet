@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Regenerate every ONNX asset the Parakeet server needs, from the NVIDIA checkpoint.
 
-Writes to --out (default training/assets):
+Writes to --out (default training/asr/assets):
 
     config.json                  model config (generated)
     vocab.txt                    SentencePiece vocab + <blk> blank (8193 lines)
@@ -243,7 +243,7 @@ def write_manifest(out):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--checkpoint", default=DEFAULT_CHECKPOINT)
-    ap.add_argument("--out", default="training/assets")
+    ap.add_argument("--out", default="training/asr/assets")
     ap.add_argument("--device", default="cpu", help="cpu | cuda (export only)")
     args = ap.parse_args()
 

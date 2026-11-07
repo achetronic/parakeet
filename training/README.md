@@ -4,13 +4,13 @@
 the official NVIDIA checkpoint. No third-party conversions needed.
 
 The directory is split by model family so future exports (VAD, diarization)
-get their own subfolder. ASR lives in `training/asr/`; output lands in
-`training/assets/`.
+get their own subfolder. ASR lives in `training/asr/` with its code and assets
+inside, so a future `training/vad/` or `training/diarization/` keeps its own
+output too.
 
 ```
 training/
-├── asr/               ASR export script (future: vad/, diarization/)
-├── assets/            generated output, gitignored
+├── asr/               ASR export script + assets (future: vad/, diarization/)
 ├── checkpoint/        .nemo checkpoint, gitignored
 ├── venv/              training environment, gitignored
 ├── Dockerfile.models  OCI storage image
@@ -20,7 +20,7 @@ training/
 
 ## What the export produces
 
-Written to `training/assets/`:
+Written to `training/asr/assets/`:
 
 | file | what |
 | --- | --- |
@@ -64,7 +64,7 @@ Manual run:
 ```sh
 training/venv/bin/python training/asr/export.py \
   --checkpoint training/checkpoint/parakeet-tdt-0.6b-v3.nemo \
-  --out training/assets
+  --out training/asr/assets
 ```
 
 ## Model images
