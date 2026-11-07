@@ -3,10 +3,15 @@ name: export-models
 on:
   workflow_dispatch:
     inputs:
-      tag:
-        description: 'Version tag for the images. Empty = checkout main + publish :latest.'
+      ref:
+        description: 'Version ref for the model image tags (e.g. v1.2.3)'
+        type: string
+        required: true
+      use_master:
+        description: 'Export from master instead of the version ref'
+        type: boolean
         required: false
-        default: ''
+        default: false
 
 permissions:
   contents: read
@@ -22,7 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag || 'main' }}
+          ref: ${{ (github.event.inputs.use_master == 'true') && 'master' || github.event.inputs.ref }}
 
       - uses: actions/setup-python@v5
         with:
@@ -42,4 +47,4 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Export and push model images
-        run: make MODEL_TAG="${{ github.event.inputs.tag || 'latest' }}" model-push-oci-images
+        run: make MODEL_TAG="${{ github.event.inputs.ref }}" model-push-oci-images
