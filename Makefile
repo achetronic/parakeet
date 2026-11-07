@@ -114,27 +114,47 @@ deps-onnxruntime: ## Install ONNX Runtime library
 	echo "ONNX Runtime installed to /usr/local/lib/"
 
 ## Model targets
+# Full model lifecycle in three stages: train (export assets), package (build
+# + push OCI images), and download (fetch prebuilt assets).
+
+### Training (export ONNX assets from checkpoints)
+# One recipe drives every model family. asr is the only one today; add vad/ or
+# diarization/ under training/ with their own export.py and requirements.txt
+# and point MODEL_FAMILY at them.
+MODEL_FAMILY ?= asr
+TRAINING_PYTHON ?= training/venv/bin/python
+TRAINING_FAMILY_DIR := training/$(MODEL_FAMILY)
+
+model-training-venv: ## Create the training venv (installs $(MODEL_FAMILY) deps)
+	@uv venv --python 3.12 training/venv
+	@uv pip install --python training/venv/bin/python torch torchaudio --index-url https://download.pytorch.org/whl/cu126
+	@uv pip install --python training/venv/bin/python -r $(TRAINING_FAMILY_DIR)/requirements.txt
+
+model-training: ## Regenerate ONNX assets for $(MODEL_FAMILY)
+	@test -x $(TRAINING_PYTHON) || (echo "training venv missing, run: make model-training-venv" && exit 1)
+	@$(TRAINING_PYTHON) $(TRAINING_FAMILY_DIR)/export.py --out $(TRAINING_FAMILY_DIR)/assets
+	@echo "Assets written to $(TRAINING_FAMILY_DIR)/assets/"
+
+### Package (build + publish OCI model images)
+# The model images carry the ASR encoder+decoder split (int8/fp32). They are
+# ASR-specific for now; a future family gets its own image recipe if needed.
+MODEL_IMAGE_REPO ?= ghcr.io/achetronic/parakeet-models
+MODEL_TAG ?= latest
+
+model-image: model-training ## Build int8 + fp32 model images locally (no push)
+	@./training/asr/build-image.sh int8 "$(MODEL_IMAGE_REPO)-int8" "$(MODEL_TAG)"
+	@./training/asr/build-image.sh fp32 "$(MODEL_IMAGE_REPO)-fp32" "$(MODEL_TAG)"
+
+model-push: model-training ## Build and push int8 + fp32 model images to GHCR
+	@./training/asr/build-image.sh int8 "$(MODEL_IMAGE_REPO)-int8" "$(MODEL_TAG)" --push
+	@./training/asr/build-image.sh fp32 "$(MODEL_IMAGE_REPO)-fp32" "$(MODEL_TAG)" --push
+
+### Download (fetch prebuilt models)
 # ASR encoder + decoder assets. Default to the community conversion; point
-# MODELS_REPO at your own HuggingFace repo to self-host (see training/README.md).
+# MODELS_REPO at your own repo to self-host (see training/README.md).
 MODELS_REPO ?= istupakov/parakeet-tdt-0.6b-v3-onnx
 
-# Silero VAD model for chunk-boundary selection (long-audio mode). Pinned to a
-# specific release tag and sha256 so the download is reproducible and verified.
-# snakers4/silero-vad is MIT licensed. NOTE: at v6.2.1 the ONNX file lives at
-# src/silero_vad/data/silero_vad.onnx (the older files/silero_vad.onnx path is
-# gone), so the URL points there.
-SILERO_VAD_VERSION ?= v6.2.1
-SILERO_VAD_SHA256 ?= 1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3
-SILERO_VAD_URL := https://github.com/snakers4/silero-vad/raw/$(SILERO_VAD_VERSION)/src/silero_vad/data/silero_vad.onnx
-
 models: models-int8 ## Download models (default: int8)
-
-models-silero-vad: ## Download and verify the Silero VAD model (MIT)
-	@mkdir -p $(MODELS_DIR)
-	@echo "Downloading Silero VAD $(SILERO_VAD_VERSION) (MIT) ..."
-	@curl -L -o $(MODELS_DIR)/silero_vad.onnx "$(SILERO_VAD_URL)"
-	@echo "$(SILERO_VAD_SHA256)  $(MODELS_DIR)/silero_vad.onnx" | sha256sum -c -
-	@echo "Silero VAD model verified"
 
 models-int8: models-silero-vad models-diarization-int8 ## Download int8 quantized models (~670MB)
 	@mkdir -p $(MODELS_DIR)
@@ -157,34 +177,21 @@ models-fp32: models-silero-vad models-diarization-fp32 ## Download fp32 full pre
 	@curl -L -o $(MODELS_DIR)/decoder_joint-model.onnx "https://huggingface.co/$(MODELS_REPO)/resolve/main/decoder_joint-model.onnx"
 	@echo "Models downloaded to $(MODELS_DIR)"
 
-# Training pipeline. One recipe drives every model family. asr is the only one
-# today; add vad/ or diarization/ under training/ with their own export.py and
-# requirements.txt and point MODEL_FAMILY at them.
-MODEL_FAMILY ?= asr
-TRAINING_PYTHON ?= training/venv/bin/python
-TRAINING_FAMILY_DIR := training/$(MODEL_FAMILY)
-MODEL_IMAGE_REPO ?= ghcr.io/achetronic/parakeet-models
-MODEL_TAG ?= latest
+# Silero VAD model for chunk-boundary selection (long-audio mode). Pinned to a
+# specific release tag and sha256 so the download is reproducible and verified.
+# snakers4/silero-vad is MIT licensed. NOTE: at v6.2.1 the ONNX file lives at
+# src/silero_vad/data/silero_vad.onnx (the older files/silero_vad.onnx path is
+# gone), so the URL points there.
+SILERO_VAD_VERSION ?= v6.2.1
+SILERO_VAD_SHA256 ?= 1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3
+SILERO_VAD_URL := https://github.com/snakers4/silero-vad/raw/$(SILERO_VAD_VERSION)/src/silero_vad/data/silero_vad.onnx
 
-model-training: ## Regenerate ONNX assets for $(MODEL_FAMILY)
-	@test -x $(TRAINING_PYTHON) || (echo "training venv missing, run: make model-training-venv" && exit 1)
-	@$(TRAINING_PYTHON) $(TRAINING_FAMILY_DIR)/export.py --out $(TRAINING_FAMILY_DIR)/assets
-	@echo "Assets written to $(TRAINING_FAMILY_DIR)/assets/"
-
-model-training-venv: ## Create the training venv (installs $(MODEL_FAMILY) deps)
-	@uv venv --python 3.12 training/venv
-	@uv pip install --python training/venv/bin/python torch torchaudio --index-url https://download.pytorch.org/whl/cu126
-	@uv pip install --python training/venv/bin/python -r $(TRAINING_FAMILY_DIR)/requirements.txt
-
-# The model images carry the ASR encoder+decoder split (int8/fp32). They are
-# ASR-specific for now; a future family gets its own image recipe if needed.
-model-image: model-training ## Build int8 + fp32 model images locally (no push)
-	@./training/asr/build-image.sh int8 "$(MODEL_IMAGE_REPO)-int8" "$(MODEL_TAG)"
-	@./training/asr/build-image.sh fp32 "$(MODEL_IMAGE_REPO)-fp32" "$(MODEL_TAG)"
-
-model-push: model-training ## Build and push int8 + fp32 model images to GHCR
-	@./training/asr/build-image.sh int8 "$(MODEL_IMAGE_REPO)-int8" "$(MODEL_TAG)" --push
-	@./training/asr/build-image.sh fp32 "$(MODEL_IMAGE_REPO)-fp32" "$(MODEL_TAG)" --push
+models-silero-vad: ## Download and verify the Silero VAD model (MIT)
+	@mkdir -p $(MODELS_DIR)
+	@echo "Downloading Silero VAD $(SILERO_VAD_VERSION) (MIT) ..."
+	@curl -L -o $(MODELS_DIR)/silero_vad.onnx "$(SILERO_VAD_URL)"
+	@echo "$(SILERO_VAD_SHA256)  $(MODELS_DIR)/silero_vad.onnx" | sha256sum -c -
+	@echo "Silero VAD model verified"
 
 # .onnx + .onnx_data must stay together (external weights, relative path); subdir
 # avoids clobbering Parakeet's config.json at models/. Ref: https://huggingface.co/onnx-community/Nemotron-3-Diarization-ONNX
@@ -284,16 +291,16 @@ help: ## Show this help message
 	@echo "  \033[36mdeps-onnxruntime\033[0m    Install ONNX Runtime library (requires sudo)"
 	@echo ""
 	@echo "\033[1mModels:\033[0m"
+	@echo "  \033[36mmodel-training-venv\033[0m  Create the training venv (Python 3.12 + deps)"
+	@echo "  \033[36mmodel-training\033[0m      Regenerate ONNX assets for a model family (default asr)"
+	@echo "  \033[36mmodel-image\033[0m         Build int8 + fp32 model images locally"
+	@echo "  \033[36mmodel-push\033[0m          Build and push int8 + fp32 model images to GHCR"
 	@echo "  \033[36mmodels\033[0m              Download models (default: int8)"
 	@echo "  \033[36mmodels-int8\033[0m         Download int8 quantized models (~670MB)"
 	@echo "  \033[36mmodels-fp32\033[0m         Download fp32 full precision models (~2.5GB)"
 	@echo "  \033[36mmodels-silero-vad\033[0m   Download and verify the Silero VAD model (MIT)"
 	@echo "  \033[36mmodels-diarization-int8\033[0m   Download int8 diarization model (~120MB)"
 	@echo "  \033[36mmodels-diarization-fp32\033[0m   Download fp32 diarization model (~400MB)"
-	@echo "  \033[36mmodel-training\033[0m      Regenerate all ASR ONNX assets from the NVIDIA checkpoint"
-	@echo "  \033[36mmodel-training-venv\033[0m  Create the training venv (Python 3.12 + nemo_toolkit)"
-	@echo "  \033[36mmodel-image\033[0m         Build int8 + fp32 model images locally"
-	@echo "  \033[36mmodel-push\033[0m          Build and push int8 + fp32 model images to GHCR"
 	@echo ""
 	@echo "\033[1mDocker:\033[0m"
 	@echo "  \033[36mdocker-build-int8\033[0m   Build Docker image with int8 models"
