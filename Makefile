@@ -26,7 +26,7 @@ MODELS_DIR := ./models
 .PHONY: all build clean test fmt vet lint run help
 .PHONY: docker-build-int8 docker-build-fp32 docker-build-cuda docker-run-int8 docker-run-fp32 docker-run-cuda docker-push
 .PHONY: models models-int8 models-fp32 models-silero-vad models-diarization-int8 models-diarization-fp32
-.PHONY: model-training model-training-venv
+.PHONY: model-training model-training-venv model-image model-push
 .PHONY: release release-linux release-darwin release-windows
 .PHONY: deps-onnxruntime
 
@@ -157,18 +157,28 @@ models-fp32: models-silero-vad models-diarization-fp32 ## Download fp32 full pre
 	@curl -L -o $(MODELS_DIR)/decoder_joint-model.onnx "https://huggingface.co/$(MODELS_REPO)/resolve/main/decoder_joint-model.onnx"
 	@echo "Models downloaded to $(MODELS_DIR)"
 
-# Python for the training pipeline. The venv is built by model-training-venv.
+# Training pipeline. The venv is built by model-training-venv.
 TRAINING_PYTHON ?= training/venv/bin/python
+MODEL_IMAGE_REPO ?= ghcr.io/achetronic/parakeet-models
+MODEL_TAG ?= latest
 
 model-training: ## Regenerate every ASR ONNX asset from the NVIDIA checkpoint
 	@test -x $(TRAINING_PYTHON) || (echo "training venv missing, run: make model-training-venv" && exit 1)
-	@$(TRAINING_PYTHON) training/export.py --checkpoint training/checkpoint/parakeet-tdt-0.6b-v3.nemo --out training/assets
+	@$(TRAINING_PYTHON) training/asr/export.py --checkpoint training/checkpoint/parakeet-tdt-0.6b-v3.nemo --out training/assets
 	@echo "Assets written to training/assets/"
 
 model-training-venv: ## Create the training venv (Python 3.12 + nemo_toolkit)
 	@uv venv --python 3.12 training/venv
 	@uv pip install --python training/venv/bin/python torch torchaudio --index-url https://download.pytorch.org/whl/cu126
 	@uv pip install --python training/venv/bin/python -r training/requirements.txt
+
+model-image: model-training ## Build int8 + fp32 model images locally (no push)
+	@./training/build-image.sh int8 "$(MODEL_IMAGE_REPO)-int8" "$(MODEL_TAG)"
+	@./training/build-image.sh fp32 "$(MODEL_IMAGE_REPO)-fp32" "$(MODEL_TAG)"
+
+model-push: model-training ## Build and push int8 + fp32 model images to GHCR
+	@./training/build-image.sh int8 "$(MODEL_IMAGE_REPO)-int8" "$(MODEL_TAG)" --push
+	@./training/build-image.sh fp32 "$(MODEL_IMAGE_REPO)-fp32" "$(MODEL_TAG)" --push
 
 # .onnx + .onnx_data must stay together (external weights, relative path); subdir
 # avoids clobbering Parakeet's config.json at models/. Ref: https://huggingface.co/onnx-community/Nemotron-3-Diarization-ONNX
@@ -276,6 +286,8 @@ help: ## Show this help message
 	@echo "  \033[36mmodels-diarization-fp32\033[0m   Download fp32 diarization model (~400MB)"
 	@echo "  \033[36mmodel-training\033[0m      Regenerate all ASR ONNX assets from the NVIDIA checkpoint"
 	@echo "  \033[36mmodel-training-venv\033[0m  Create the training venv (Python 3.12 + nemo_toolkit)"
+	@echo "  \033[36mmodel-image\033[0m         Build int8 + fp32 model images locally"
+	@echo "  \033[36mmodel-push\033[0m          Build and push int8 + fp32 model images to GHCR"
 	@echo ""
 	@echo "\033[1mDocker:\033[0m"
 	@echo "  \033[36mdocker-build-int8\033[0m   Build Docker image with int8 models"

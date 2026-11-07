@@ -1,0 +1,52 @@
+name: models
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Version tag for the images. Empty publishes :latest and checks out main.'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || 'main' }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        run: pip install --quiet uv
+
+      - name: Export ASR models (CPU)
+        run: |
+          uv venv --python 3.12 training/venv
+          uv pip install --python training/venv/bin/python torch --index-url https://download.pytorch.org/whl/cpu
+          uv pip install --python training/venv/bin/python -r training/requirements.txt
+          training/venv/bin/python training/asr/export.py \
+            --checkpoint training/checkpoint/parakeet-tdt-0.6b-v3.nemo \
+            --out training/assets
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push model images
+        env:
+          IMG: ghcr.io/${{ github.repository_owner }}/parakeet-models
+          TAG: ${{ github.event.inputs.tag || 'latest' }}
+        run: |
+          ./training/build-image.sh int8  "$IMG-int8"  "$TAG" --push
+          ./training/build-image.sh fp32 "$IMG-fp32" "$TAG" --push

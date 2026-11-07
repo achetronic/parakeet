@@ -2,8 +2,9 @@
 checkpoint/
 assets/
 venv/
+.image/
 
-# Generated ONNX assets go to HuggingFace, not git.
+# Generated ONNX assets travel as OCI images, not git.
 *.onnx
 *.onnx.data
 manifest.txt

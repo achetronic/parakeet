@@ -1,9 +1,24 @@
 # Regenerating the ONNX models
 
-`training/export.py` rebuilds every ONNX asset the server loads, from the
-official NVIDIA checkpoint. No third-party conversions needed.
+`training/asr/export.py` rebuilds every ASR ONNX asset the server loads, from
+the official NVIDIA checkpoint. No third-party conversions needed.
 
-## What it produces
+The directory is split by model family so future exports (VAD, diarization)
+get their own subfolder. ASR lives in `training/asr/`; output lands in
+`training/assets/`.
+
+```
+training/
+├── asr/               ASR export script (future: vad/, diarization/)
+├── assets/            generated output, gitignored
+├── checkpoint/        .nemo checkpoint, gitignored
+├── venv/              training environment, gitignored
+├── Dockerfile.models  OCI storage image
+├── build-image.sh     builds + pushes the model images
+└── requirements.txt
+```
+
+## What the export produces
 
 Written to `training/assets/`:
 
@@ -25,6 +40,7 @@ Written to `training/assets/`:
 - Python 3.12. 3.14 does not work with torch/nemo.
 - `uv` to build the venv.
 - ~20 GB disk. Checkpoint 2.5 GB plus fp32 and int8 assets.
+- Docker, to build the model images.
 
 ## Setup, once
 
@@ -34,7 +50,7 @@ make model-training-venv
 
 This builds `training/venv` with Python 3.12, torch (cu126) and nemo_toolkit 3.0.
 
-## Generate the assets
+## Regenerate the assets
 
 ```sh
 make model-training
@@ -43,13 +59,44 @@ make model-training
 If the checkpoint is missing it downloads it from
 `nvidia/parakeet-tdt-0.6b-v3` (no token required).
 
-Manual run, if you prefer:
+Manual run:
 
 ```sh
-training/venv/bin/python training/export.py \
+training/venv/bin/python training/asr/export.py \
   --checkpoint training/checkpoint/parakeet-tdt-0.6b-v3.nemo \
   --out training/assets
 ```
+
+## Model images
+
+The assets are shipped as OCI images on GitHub Container Registry. Two images,
+each with both attention modes inside:
+
+| image | contents |
+| --- | --- |
+| `ghcr.io/achetronic/parakeet-models-int8` | int8 encoders + decoder + vocab |
+| `ghcr.io/achetronic/parakeet-models-fp32` | fp32 encoders + decoder + vocab |
+
+Build locally without pushing:
+
+```sh
+make model-image
+```
+
+Build and push:
+
+```sh
+docker login ghcr.io -u <user> --password-stdin   # once, with a PAT
+make MODEL_TAG=v1.0.0 model-push
+```
+
+`MODEL_TAG` defaults to `latest`.
+
+## CI regeneration
+
+`.github/workflows/models.yaml` regenerates everything and pushes both images.
+Trigger it manually with a tag. Empty tag means checkout `main` and publish
+`:latest`; a tag checks out that ref and publishes under that tag.
 
 ## Local attention: the patch
 
@@ -70,18 +117,3 @@ Test reference only. The server never loads it; `internal/mel` handles the mel
 frontend. torch>=2.x makes `torch.stft` return complex values, which
 torchscript cannot trace, so the export is best-effort and usually skipped.
 To regenerate it, patch the preprocessor stft to `return_complex=False`.
-
-## Publishing to HuggingFace
-
-Assets are gitignored. They go to your own HuggingFace repo and the Makefile
-downloads them from there.
-
-```sh
-huggingface-cli upload <your-user>/parakeet-tdt-0.6b-v3-onnx training/assets/ . --repo-type model
-```
-
-Then point the Makefile at it:
-
-```sh
-make MODELS_REPO=<your-user>/parakeet-tdt-0.6b-v3-onnx models-int8
-```
