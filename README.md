@@ -192,7 +192,7 @@ make model-download            # ASR + VAD + diarization, int8 + fp32
 make model-download-asr-int8   # int8 quantized models (recommended, ~670MB)
 
 # Run (requires ONNX Runtime - see Installing ONNX Runtime section above)
-./parakeet -port 5092 -models ./models/int8
+./parakeet -port 5092 -models ./models
 ```
 
 ### From Source
@@ -305,7 +305,8 @@ start instead of silently falling back to CPU.
 | Flag                          | Description                                                              | Default                    | Example                                |
 | ----------------------------- | ------------------------------------------------------------------------ | -------------------------- | -------------------------------------- |
 | `-port`                       | HTTP server port                                                         | `5092`                     | `-port 8080`                           |
-| `-models`                     | Path to models directory                                                 | `./models/int8`            | `-models /opt/parakeet/models/int8`  |
+| `-models`                     | Path to models directory (organized by family)                          | `./models`                 | `-models /opt/parakeet/models`         |
+| `-model-precision`            | Model precision: `int8` or `fp32`                                       | `int8`                     | `-model-precision fp32`               |
 | `-log-level`                  | Log level: debug, info, warn, error                                      | `info`                     | `-log-level debug`                     |
 | `-log-format`                 | Log output format: text or json                                          | `text`                     | `-log-format json`                     |
 | `-workers`                    | Concurrent transcriptions (each ~670MB RAM/VRAM for int8)                | `4`                        | `-workers 2`                           |
@@ -329,7 +330,7 @@ start instead of silently falling back to CPU.
 ./parakeet
 
 # Custom port and models directory
-./parakeet -port 8080 -models /opt/models/int8
+./parakeet -port 8080 -models /opt/models
 
 # Enable debug logging for troubleshooting
 ./parakeet -log-level debug
@@ -394,32 +395,42 @@ The server can optionally distinguish speakers using [NVIDIA Nemotron-3-Diarizat
 
 ### Model Files
 
-The following files are required in the models directory:
+Models are organized by family, precision inside. The server reads the family
+from `-models` (default `./models`) and the precision from `-model-precision`
+(default `int8`).
 
-| File                            | Size   | Description                                              |
-| ------------------------------- | ------ | -------------------------------------------------------- |
-| `config.json`                   | 97 B   | Model configuration                                      |
-| `vocab.txt`                     | 94 KB  | SentencePiece vocabulary                                 |
-| `nemo128.onnx`                  | 140 KB | Preprocessor graph                                       |
-| `encoder-model.int8.onnx`       | 652 MB | Quantized encoder                                        |
-| `decoder_joint-model.int8.onnx` | 18 MB  | Quantized TDT decoder                                    |
-| `silero_vad.onnx`               | 2.3 MB | Silero VAD (chunk boundaries, long-audio only; optional) |
+```
+models/
+├── asr/int8/     config.json, vocab.txt, nemo128.onnx, encoder-model.int8.onnx, decoder_joint-model.int8.onnx
+├── asr/fp32/     config.json, vocab.txt, nemo128.onnx, encoder-model.onnx + .data, decoder_joint-model.onnx
+├── vad/          silero_vad.onnx
+└── diarization/int8/ + diarization/fp32/   Nemotron-3-Diarization
+```
 
-For full precision models, use `encoder-model.onnx` (requires `encoder-model.onnx.data`, 2.5GB total) and `decoder_joint-model.onnx` (72MB).
+| File (in `asr/<precision>/`)        | Size   | Description                 |
+| ----------------------------------- | ------ | --------------------------- |
+| `config.json`                       | 97 B   | Model configuration         |
+| `vocab.txt`                         | 94 KB  | SentencePiece vocabulary    |
+| `nemo128.onnx`                      | 140 KB | Preprocessor graph          |
+| `encoder-model.int8.onnx`           | 652 MB | int8 encoder                |
+| `decoder_joint-model.int8.onnx`     | 18 MB  | int8 TDT decoder            |
+| `encoder-model.onnx` + `.data`      | 2.5 GB | fp32 encoder                |
+| `decoder_joint-model.onnx`          | 72 MB  | fp32 TDT decoder            |
 
-Speaker diarization (optional, only when `-enable-diarization` is set) needs a `diarization/` subdirectory with the Nemotron-3-Diarization model:
+`vad/silero_vad.onnx` ([snakers4/silero-vad](https://github.com/snakers4/silero-vad), MIT, pinned to v6.2.1) is precision-independent. Used only for chunk boundaries in long-audio mode; missing is a graceful degrade to mel energy.
 
-| File (in `diarization/`)              | Size   | Description                      |
-| ------------------------------------- | ------ | -------------------------------- |
-| `model_quantized.onnx` + `.onnx_data` | 120 MB | int8 diarization encoder         |
-| or `model.onnx` + `model.onnx_data`   | 400 MB | fp32 diarization encoder         |
-| `config.json`                         | 1.6 KB | Streaming / speaker-cache config |
-| `preprocessor_config.json`            | 339 B  | Feature extractor config         |
-| `processor_config.json`               | 623 B  | Processor config                 |
+Speaker diarization (optional, only when `-enable-diarization` is set) needs the
+Nemotron-3-Diarization model under `diarization/<precision>/`:
 
-Downloaded by `make model-download` (int8 and fp32 variants).
+| File (in `diarization/<precision>/`)   | Size   | Description                      |
+| -------------------------------------- | ------ | -------------------------------- |
+| `model_quantized.onnx` + `.onnx_data`  | 120 MB | int8 diarization encoder         |
+| or `model.onnx` + `model.onnx_data`    | 400 MB | fp32 diarization encoder         |
+| `config.json`                          | 1.6 KB | Streaming / speaker-cache config |
+| `preprocessor_config.json`             | 339 B  | Feature extractor config         |
+| `processor_config.json`                | 623 B  | Processor config                 |
 
-`silero_vad.onnx` ([snakers4/silero-vad](https://github.com/snakers4/silero-vad), MIT, pinned to release v6.2.1) is downloaded and checksum-verified by `make model-download`. It is only used to place chunk boundaries on silence in long-audio mode; if it is missing the server logs a warning once and falls back to mel-energy boundaries.
+Everything is downloaded by `make model-download`.
 
 ## API Reference
 

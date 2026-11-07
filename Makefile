@@ -70,7 +70,7 @@ run-dev: build ## Run with custom port for development
 		echo "Error: ONNX Runtime library not found. Run 'make deps-onnxruntime' to install it."; \
 		exit 1; \
 	fi
-	ONNXRUNTIME_LIB=$(ONNXRUNTIME_LIB) ./$(BINARY_NAME) -port 5092 -models $(MODELS_DIR)/int8 -log-level=debug
+	ONNXRUNTIME_LIB=$(ONNXRUNTIME_LIB) ./$(BINARY_NAME) -port 5092 -models $(MODELS_DIR) -log-level=debug
 
 clean: ## Remove build artifacts
 	rm -rf $(BIN_DIR)
@@ -157,65 +157,64 @@ model-push-oci-images: model-training-asr-export ## Build and push int8 + fp32 m
 	@./training/asr/build-image.sh fp32 "$(MODEL_IMAGE_REPO)-fp32" "$(MODEL_TAG)" --push
 
 ### Download (fetch prebuilt models)
-# Each target downloads one model family and precision into its own directory
-# under models/. int8/ and fp32/ are self-contained runtime dirs (ASR + VAD +
-# diarization), so the server runs with -models ./models/int8 or ./models/fp32.
-# model-download pulls everything.
+# models/ is organized by model family first, precision second:
+#   models/asr/{int8,fp32}, models/vad, models/diarization/{int8,fp32}.
+# VAD has no precision. model-download pulls everything.
 
 # ASR encoder + decoder assets. Default to the community conversion; point
 # MODELS_REPO at your own repo to self-host (see training/README.md).
 MODELS_REPO ?= istupakov/parakeet-tdt-0.6b-v3-onnx
-MODELS_INT8_DIR := $(MODELS_DIR)/int8
-MODELS_FP32_DIR := $(MODELS_DIR)/fp32
+MODELS_ASR_INT8_DIR := $(MODELS_DIR)/asr/int8
+MODELS_ASR_FP32_DIR := $(MODELS_DIR)/asr/fp32
+MODELS_VAD_DIR := $(MODELS_DIR)/vad
 
 model-download: model-download-asr model-download-vad model-download-diarization-int8 model-download-diarization-fp32 ## Download every model (ASR, VAD, diarization, both precisions)
 
 model-download-asr: model-download-asr-int8 model-download-asr-fp32 ## Download ASR models (int8 + fp32)
 
 model-download-asr-int8: ## Download ASR int8 models (~670MB)
-	@mkdir -p $(MODELS_INT8_DIR)
+	@mkdir -p $(MODELS_ASR_INT8_DIR)
 	@echo "Downloading Parakeet TDT int8 models from https://huggingface.co/$(MODELS_REPO) ..."
-	@curl -L -o $(MODELS_INT8_DIR)/config.json "https://huggingface.co/$(MODELS_REPO)/resolve/main/config.json"
-	@curl -L -o $(MODELS_INT8_DIR)/vocab.txt "https://huggingface.co/$(MODELS_REPO)/resolve/main/vocab.txt"
-	@curl -L -o $(MODELS_INT8_DIR)/nemo128.onnx "https://huggingface.co/$(MODELS_REPO)/resolve/main/nemo128.onnx"
-	@curl -L -o $(MODELS_INT8_DIR)/encoder-model.int8.onnx "https://huggingface.co/$(MODELS_REPO)/resolve/main/encoder-model.int8.onnx"
-	@curl -L -o $(MODELS_INT8_DIR)/decoder_joint-model.int8.onnx "https://huggingface.co/$(MODELS_REPO)/resolve/main/decoder_joint-model.int8.onnx"
-	@echo "ASR int8 models downloaded to $(MODELS_INT8_DIR)"
+	@curl -L -o $(MODELS_ASR_INT8_DIR)/config.json "https://huggingface.co/$(MODELS_REPO)/resolve/main/config.json"
+	@curl -L -o $(MODELS_ASR_INT8_DIR)/vocab.txt "https://huggingface.co/$(MODELS_REPO)/resolve/main/vocab.txt"
+	@curl -L -o $(MODELS_ASR_INT8_DIR)/nemo128.onnx "https://huggingface.co/$(MODELS_REPO)/resolve/main/nemo128.onnx"
+	@curl -L -o $(MODELS_ASR_INT8_DIR)/encoder-model.int8.onnx "https://huggingface.co/$(MODELS_REPO)/resolve/main/encoder-model.int8.onnx"
+	@curl -L -o $(MODELS_ASR_INT8_DIR)/decoder_joint-model.int8.onnx "https://huggingface.co/$(MODELS_REPO)/resolve/main/decoder_joint-model.int8.onnx"
+	@echo "ASR int8 models downloaded to $(MODELS_ASR_INT8_DIR)"
 
 model-download-asr-fp32: ## Download ASR fp32 models (~2.5GB)
-	@mkdir -p $(MODELS_FP32_DIR)
+	@mkdir -p $(MODELS_ASR_FP32_DIR)
 	@echo "Downloading Parakeet TDT fp32 models from https://huggingface.co/$(MODELS_REPO) ..."
-	@curl -L -o $(MODELS_FP32_DIR)/config.json "https://huggingface.co/$(MODELS_REPO)/resolve/main/config.json"
-	@curl -L -o $(MODELS_FP32_DIR)/vocab.txt "https://huggingface.co/$(MODELS_REPO)/resolve/main/vocab.txt"
-	@curl -L -o $(MODELS_FP32_DIR)/nemo128.onnx "https://huggingface.co/$(MODELS_REPO)/resolve/main/nemo128.onnx"
-	@curl -L -o $(MODELS_FP32_DIR)/encoder-model.onnx "https://huggingface.co/$(MODELS_REPO)/resolve/main/encoder-model.onnx"
-	@curl -L -o $(MODELS_FP32_DIR)/encoder-model.onnx.data "https://huggingface.co/$(MODELS_REPO)/resolve/main/encoder-model.onnx.data"
-	@curl -L -o $(MODELS_FP32_DIR)/decoder_joint-model.onnx "https://huggingface.co/$(MODELS_REPO)/resolve/main/decoder_joint-model.onnx"
-	@echo "ASR fp32 models downloaded to $(MODELS_FP32_DIR)"
+	@curl -L -o $(MODELS_ASR_FP32_DIR)/config.json "https://huggingface.co/$(MODELS_REPO)/resolve/main/config.json"
+	@curl -L -o $(MODELS_ASR_FP32_DIR)/vocab.txt "https://huggingface.co/$(MODELS_REPO)/resolve/main/vocab.txt"
+	@curl -L -o $(MODELS_ASR_FP32_DIR)/nemo128.onnx "https://huggingface.co/$(MODELS_REPO)/resolve/main/nemo128.onnx"
+	@curl -L -o $(MODELS_ASR_FP32_DIR)/encoder-model.onnx "https://huggingface.co/$(MODELS_REPO)/resolve/main/encoder-model.onnx"
+	@curl -L -o $(MODELS_ASR_FP32_DIR)/encoder-model.onnx.data "https://huggingface.co/$(MODELS_REPO)/resolve/main/encoder-model.onnx.data"
+	@curl -L -o $(MODELS_ASR_FP32_DIR)/decoder_joint-model.onnx "https://huggingface.co/$(MODELS_REPO)/resolve/main/decoder_joint-model.onnx"
+	@echo "ASR fp32 models downloaded to $(MODELS_ASR_FP32_DIR)"
 
 # Silero VAD model for chunk-boundary selection (long-audio mode). Pinned to a
 # specific release tag and sha256 so the download is reproducible and verified.
 # snakers4/silero-vad is MIT licensed. NOTE: at v6.2.1 the ONNX file lives at
 # src/silero_vad/data/silero_vad.onnx (the older files/silero_vad.onnx path is
-# gone), so the URL points there. Copied into both precision dirs so each stays
-# a self-contained runtime dir.
+# gone), so the URL points there. VAD is precision-independent, so it lives
+# directly under models/vad/.
 SILERO_VAD_VERSION ?= v6.2.1
 SILERO_VAD_SHA256 ?= 1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3
 SILERO_VAD_URL := https://github.com/snakers4/silero-vad/raw/$(SILERO_VAD_VERSION)/src/silero_vad/data/silero_vad.onnx
 
 model-download-vad: ## Download and verify the Silero VAD model (MIT)
-	@mkdir -p $(MODELS_INT8_DIR) $(MODELS_FP32_DIR)
+	@mkdir -p $(MODELS_VAD_DIR)
 	@echo "Downloading Silero VAD $(SILERO_VAD_VERSION) (MIT) ..."
-	@curl -L -o $(MODELS_INT8_DIR)/silero_vad.onnx "$(SILERO_VAD_URL)"
-	@echo "$(SILERO_VAD_SHA256)  $(MODELS_INT8_DIR)/silero_vad.onnx" | sha256sum -c -
-	@cp $(MODELS_INT8_DIR)/silero_vad.onnx $(MODELS_FP32_DIR)/silero_vad.onnx
+	@curl -L -o $(MODELS_VAD_DIR)/silero_vad.onnx "$(SILERO_VAD_URL)"
+	@echo "$(SILERO_VAD_SHA256)  $(MODELS_VAD_DIR)/silero_vad.onnx" | sha256sum -c -
 	@echo "Silero VAD model verified"
 
-# .onnx + .onnx_data must stay together (external weights, relative path); subdir
-# avoids clobbering Parakeet's config.json at models/. Ref: https://huggingface.co/onnx-community/Nemotron-3-Diarization-ONNX
+# .onnx + .onnx_data must stay together (external weights, relative path). Ref:
+# https://huggingface.co/onnx-community/Nemotron-3-Diarization-ONNX
 DIARIZATION_REPO := onnx-community/Nemotron-3-Diarization-ONNX
-DIARIZATION_INT8_DIR := $(MODELS_INT8_DIR)/diarization
-DIARIZATION_FP32_DIR := $(MODELS_FP32_DIR)/diarization
+DIARIZATION_INT8_DIR := $(MODELS_DIR)/diarization/int8
+DIARIZATION_FP32_DIR := $(MODELS_DIR)/diarization/fp32
 
 model-download-diarization-int8: ## Download int8 diarization model (~120MB)
 	@mkdir -p $(DIARIZATION_INT8_DIR)
