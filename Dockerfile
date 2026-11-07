@@ -39,7 +39,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY Makefile /app/Makefile
-RUN make MODELS_DIR=/models model-download-asr-${MODEL_PRECISION}
+RUN make MODELS_DIR=/models model-download-asr-${MODEL_PRECISION} model-download-vad model-download-diarization-${MODEL_PRECISION}
 
 # Runtime stage
 FROM debian:bookworm-slim
@@ -70,7 +70,8 @@ EXPOSE 5092
 # the user passes their own flags, so a default baked into CMD is lost on any
 # override. Every flag reads its PARAKEET_* env var, and a flag passed on the
 # command line still wins over the env var.
+ARG MODEL_PRECISION=int8
 ENV PARAKEET_PORT=5092
-ENV PARAKEET_MODELS=/models
+ENV PARAKEET_MODELS=/models/${MODEL_PRECISION}
 
 ENTRYPOINT ["/app/parakeet"]

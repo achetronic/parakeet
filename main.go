@@ -24,7 +24,7 @@ func main() {
 	var gpuDevicesRaw string
 
 	flag.IntVar(&cfg.Port, "port", 5092, "Server port")
-	flag.StringVar(&cfg.ModelsDir, "models", "./models", "Models directory")
+	flag.StringVar(&cfg.ModelsDir, "models", "./models/int8", "Models directory")
 	flag.StringVar(&cfg.LogLevel, "log-level", "info", "Log level: debug, info, warn, error")
 	flag.StringVar(&cfg.LogFormat, "log-format", "text", "Log format: text or json")
 	flag.IntVar(&cfg.Workers, "workers", 4, "Number of concurrent inference workers (each uses ~670MB RAM for int8 models)")

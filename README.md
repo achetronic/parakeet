@@ -187,12 +187,12 @@ curl -L -o parakeet https://github.com/achetronic/parakeet/releases/latest/downl
 chmod +x parakeet
 
 # Download models (using Makefile)
-make model-download-asr           # int8 quantized models (recommended, ~670MB)
-# Or for full precision:
-make model-download-asr-fp32      # fp32 models (~2.5GB)
+make model-download            # ASR + VAD + diarization, int8 + fp32
+# Or just the ASR int8 models:
+make model-download-asr-int8   # int8 quantized models (recommended, ~670MB)
 
 # Run (requires ONNX Runtime - see Installing ONNX Runtime section above)
-./parakeet -port 5092 -models ./models
+./parakeet -port 5092 -models ./models/int8
 ```
 
 ### From Source
@@ -203,8 +203,9 @@ git clone https://github.com/achetronic/parakeet.git
 cd parakeet
 
 # Download models
-make model-download-asr           # int8 quantized models (recommended)
-# Or: make model-download-asr-fp32  # full precision models
+make model-download            # everything (ASR + VAD + diarization, both precisions)
+# Or just ASR int8:
+make model-download-asr-int8   # int8 quantized models (recommended)
 
 # Build
 make build
@@ -304,7 +305,7 @@ start instead of silently falling back to CPU.
 | Flag                          | Description                                                              | Default                    | Example                                |
 | ----------------------------- | ------------------------------------------------------------------------ | -------------------------- | -------------------------------------- |
 | `-port`                       | HTTP server port                                                         | `5092`                     | `-port 8080`                           |
-| `-models`                     | Path to models directory                                                 | `./models`                 | `-models /opt/parakeet/models`         |
+| `-models`                     | Path to models directory                                                 | `./models/int8`            | `-models /opt/parakeet/models/int8`  |
 | `-log-level`                  | Log level: debug, info, warn, error                                      | `info`                     | `-log-level debug`                     |
 | `-log-format`                 | Log output format: text or json                                          | `text`                     | `-log-format json`                     |
 | `-workers`                    | Concurrent transcriptions (each ~670MB RAM/VRAM for int8)                | `4`                        | `-workers 2`                           |
@@ -328,7 +329,7 @@ start instead of silently falling back to CPU.
 ./parakeet
 
 # Custom port and models directory
-./parakeet -port 8080 -models /opt/models
+./parakeet -port 8080 -models /opt/models/int8
 
 # Enable debug logging for troubleshooting
 ./parakeet -log-level debug
@@ -377,7 +378,7 @@ avoid this, the overlap is split on silence using a cascade (each layer falls
 through to the next when it cannot decide):
 
 1. **Silero VAD** picks the centre of the longest silence in the overlap. This
-   needs `silero_vad.onnx` in the models directory (downloaded by `make model-download-asr`;
+   needs `silero_vad.onnx` in the models directory (downloaded by `make model-download`;
    see below). A missing model is not fatal: it warns once and falls back to the
    next layer.
 2. **Mel energy** picks the quietest point of the already-extracted features.
@@ -389,7 +390,7 @@ at each seam. You can turn off individual layers with
 
 ### Speaker Diarization
 
-The server can optionally distinguish speakers using [NVIDIA Nemotron-3-Diarization](https://huggingface.co/nvidia/Nemotron-3-Diarization) (100M parameters, up to 8 speakers), running as a second ONNX model. Diarization is **disabled by default**; enable it with `-enable-diarization` (or `PARAKEET_ENABLE_DIARIZATION=true`) and request it per call with `diarize=true`. The model is bundled by `make model-download-asr` and in the Docker images.
+The server can optionally distinguish speakers using [NVIDIA Nemotron-3-Diarization](https://huggingface.co/nvidia/Nemotron-3-Diarization) (100M parameters, up to 8 speakers), running as a second ONNX model. Diarization is **disabled by default**; enable it with `-enable-diarization` (or `PARAKEET_ENABLE_DIARIZATION=true`) and request it per call with `diarize=true`. The model is bundled by `make model-download` and in the Docker images.
 
 ### Model Files
 
@@ -416,9 +417,9 @@ Speaker diarization (optional, only when `-enable-diarization` is set) needs a `
 | `preprocessor_config.json`            | 339 B  | Feature extractor config         |
 | `processor_config.json`               | 623 B  | Processor config                 |
 
-Downloaded by `make model-download-asr` (chained into `model-download-asr-int8`/`model-download-asr-fp32`).
+Downloaded by `make model-download` (int8 and fp32 variants).
 
-`silero_vad.onnx` ([snakers4/silero-vad](https://github.com/snakers4/silero-vad), MIT, pinned to release v6.2.1) is downloaded and checksum-verified by `make model-download-asr`. It is only used to place chunk boundaries on silence in long-audio mode; if it is missing the server logs a warning once and falls back to mel-energy boundaries.
+`silero_vad.onnx` ([snakers4/silero-vad](https://github.com/snakers4/silero-vad), MIT, pinned to release v6.2.1) is downloaded and checksum-verified by `make model-download`. It is only used to place chunk boundaries on silence in long-audio mode; if it is missing the server logs a warning once and falls back to mel-energy boundaries.
 
 ## API Reference
 
@@ -651,9 +652,9 @@ make test          # Run tests
 make test-coverage # Run tests with coverage report
 
 # Models
-make model-download-asr        # Download int8 models (default)
-make model-download-asr-int8   # Download int8 quantized models
-make model-download-asr-fp32   # Download full precision models
+make model-download        # Download every model (ASR + VAD + diarization, both precisions)
+make model-download-asr-int8   # Download int8 quantized ASR models
+make model-download-asr-fp32   # Download full precision ASR models
 
 # Docker
 make docker-build-int8  # Build Docker image with int8 models
@@ -698,7 +699,7 @@ Common installation locations:
 Download the models:
 
 ```bash
-make model-download-asr
+make model-download
 ```
 
 ### Out of memory errors

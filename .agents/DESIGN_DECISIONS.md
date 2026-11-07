@@ -76,7 +76,7 @@ Architectural and design decisions made in this project.
 
 **Context**: The model ships in fp32 and int8.
 
-**Decision**: Default to int8 (`make model-download-asr`).
+**Decision**: Default to int8 (`make model-download`).
 
 **Rationale**: ~4x smaller (~670MB vs ~2.5GB), minimal accuracy loss.
 
