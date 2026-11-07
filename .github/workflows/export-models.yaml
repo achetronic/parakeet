@@ -43,8 +43,10 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          # GITHUB_TOKEN is unreliable for standalone packages (a second large
+          # push can be denied). Use a PAT with write:packages + read:packages.
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GHCR_TOKEN }}
 
       - name: Export and push model images
         run: make MODEL_TAG="${{ github.event.inputs.ref }}" model-push-oci-images
