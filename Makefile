@@ -26,7 +26,7 @@ MODELS_DIR := ./models
 .PHONY: all build clean test fmt vet lint run help
 .PHONY: docker-build-int8 docker-build-fp32 docker-build-cuda docker-run-int8 docker-run-fp32 docker-run-cuda docker-push
 .PHONY: models models-int8 models-fp32 models-silero-vad models-diarization-int8 models-diarization-fp32
-.PHONY: model-training model-training-venv model-image model-push
+.PHONY: model-training-asr-venv model-training-asr-export model-build-oci-images model-push-oci-images
 .PHONY: release release-linux release-darwin release-windows
 .PHONY: deps-onnxruntime
 
@@ -128,34 +128,31 @@ deps-onnxruntime: ## Install ONNX Runtime library
 # + push OCI images), and download (fetch prebuilt assets).
 
 ### Training (export ONNX assets from checkpoints)
-# One recipe drives every model family. asr is the only one today; add vad/ or
-# diarization/ under training/ with their own export.py and requirements.txt
-# and point MODEL_FAMILY at them.
-MODEL_FAMILY ?= asr
+# Each model family gets its own venv and export targets. asr is the only one
+# today; add vad/ or diarization/ under training/ and mirror these targets.
 TRAINING_PYTHON ?= training/venv/bin/python
-TRAINING_FAMILY_DIR := training/$(MODEL_FAMILY)
 
-model-training-venv: ## Create the training venv (installs $(MODEL_FAMILY) deps)
+model-training-asr-venv: ## Create the training venv with ASR dependencies
 	@uv venv --python 3.12 training/venv
 	@uv pip install --python training/venv/bin/python torch torchaudio --index-url https://download.pytorch.org/whl/cu126
-	@uv pip install --python training/venv/bin/python -r $(TRAINING_FAMILY_DIR)/requirements.txt
+	@uv pip install --python training/venv/bin/python -r training/asr/requirements.txt
 
-model-training: ## Regenerate ONNX assets for $(MODEL_FAMILY)
-	@test -x $(TRAINING_PYTHON) || (echo "training venv missing, run: make model-training-venv" && exit 1)
-	@$(TRAINING_PYTHON) $(TRAINING_FAMILY_DIR)/export.py --out $(TRAINING_FAMILY_DIR)/assets
-	@echo "Assets written to $(TRAINING_FAMILY_DIR)/assets/"
+model-training-asr-export: ## Regenerate ASR ONNX assets from the NVIDIA checkpoint
+	@test -x $(TRAINING_PYTHON) || (echo "training venv missing, run: make model-training-asr-venv" && exit 1)
+	@$(TRAINING_PYTHON) training/asr/export.py --out training/asr/assets
+	@echo "Assets written to training/asr/assets/"
 
 ### Package (build + publish OCI model images)
 # The model images carry the ASR encoder+decoder split (int8/fp32). They are
-# ASR-specific for now; a future family gets its own image recipe if needed.
+# ASR-specific for now; a future family gets its own image targets if needed.
 MODEL_IMAGE_REPO ?= ghcr.io/achetronic/parakeet-models
 MODEL_TAG ?= latest
 
-model-image: model-training ## Build int8 + fp32 model images locally (no push)
+model-build-oci-images: model-training-asr-export ## Build int8 + fp32 model images locally (no push)
 	@./training/asr/build-image.sh int8 "$(MODEL_IMAGE_REPO)-int8" "$(MODEL_TAG)"
 	@./training/asr/build-image.sh fp32 "$(MODEL_IMAGE_REPO)-fp32" "$(MODEL_TAG)"
 
-model-push: model-training ## Build and push int8 + fp32 model images to GHCR
+model-push-oci-images: model-training-asr-export ## Build and push int8 + fp32 model images to GHCR
 	@./training/asr/build-image.sh int8 "$(MODEL_IMAGE_REPO)-int8" "$(MODEL_TAG)" --push
 	@./training/asr/build-image.sh fp32 "$(MODEL_IMAGE_REPO)-fp32" "$(MODEL_TAG)" --push
 
@@ -307,10 +304,10 @@ help: ## Show this help message
 	@echo "  \033[36mdeps-onnxruntime\033[0m    Install ONNX Runtime library (requires sudo)"
 	@echo ""
 	@echo "\033[1mModels:\033[0m"
-	@echo "  \033[36mmodel-training-venv\033[0m  Create the training venv (Python 3.12 + deps)"
-	@echo "  \033[36mmodel-training\033[0m      Regenerate ONNX assets for a model family (default asr)"
-	@echo "  \033[36mmodel-image\033[0m         Build int8 + fp32 model images locally"
-	@echo "  \033[36mmodel-push\033[0m          Build and push int8 + fp32 model images to GHCR"
+	@echo "  \033[36mmodel-training-asr-venv\033[0m  Create the training venv with ASR deps"
+	@echo "  \033[36mmodel-training-asr-export\033[0m  Regenerate ASR ONNX assets from the NVIDIA checkpoint"
+	@echo "  \033[36mmodel-build-oci-images\033[0m  Build int8 + fp32 model images locally"
+	@echo "  \033[36mmodel-push-oci-images\033[0m  Build and push int8 + fp32 model images to GHCR"
 	@echo "  \033[36mmodels\033[0m              Download models (default: int8)"
 	@echo "  \033[36mmodels-int8\033[0m         Download int8 quantized models (~670MB)"
 	@echo "  \033[36mmodels-fp32\033[0m         Download fp32 full precision models (~2.5GB)"

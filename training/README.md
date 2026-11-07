@@ -5,8 +5,8 @@ the official NVIDIA checkpoint. No third-party conversions needed.
 
 The directory is split by model family so future exports (VAD, diarization)
 get their own subfolder. Each family keeps its code, checkpoint, requirements
-and assets inside its own `training/<family>/` directory. The Makefile recipes
-pick the family via `MODEL_FAMILY` (default `asr`).
+and assets inside its own `training/<family>/` directory. The Makefile has
+per-family targets, so `asr` is explicit in the target names.
 
 ```
 training/
@@ -45,22 +45,16 @@ Written to `training/asr/assets/`:
 ## Setup, once
 
 ```sh
-make model-training-venv
+make model-training-asr-venv
 ```
 
 This builds `training/venv` with Python 3.12 and torch, plus the dependencies
-from `training/$(MODEL_FAMILY)/requirements.txt` (nemo_toolkit for ASR).
+from `training/asr/requirements.txt` (nemo_toolkit).
 
 ## Regenerate the assets
 
 ```sh
-make model-training
-```
-
-`MODEL_FAMILY` defaults to `asr`. A future family works the same way:
-
-```sh
-make MODEL_FAMILY=vad model-training
+make model-training-asr-export
 ```
 
 If the checkpoint is missing it downloads it from
@@ -89,14 +83,14 @@ each with both attention modes inside:
 Build locally without pushing:
 
 ```sh
-make model-image
+make model-build-oci-images
 ```
 
 Build and push:
 
 ```sh
 docker login ghcr.io -u <user> --password-stdin   # once, with a PAT
-make MODEL_TAG=v1.0.0 model-push
+make MODEL_TAG=v1.0.0 model-push-oci-images
 ```
 
 `MODEL_TAG` defaults to `latest`.
