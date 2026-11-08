@@ -21,7 +21,8 @@ The only external dependency is the checkpoint. It is downloaded if missing:
 The local-attention forward is patched because NeMo 3.0 exports it wrong. Its
 sliding-chunks path rebuilds the attention band with new_empty() plus in-place
 slice assignments, which the torchscript exporter mis-compiles. The patch swaps
-in a full-attention + band-mask forward that uses only export-safe ops.
+in a functional sliding-chunks forward (cat/pad/masked_fill only) that keeps
+O(T*w) memory instead of O(T^2).
 """
 
 import argparse
@@ -139,39 +140,114 @@ def export_preprocessor(model, out):
 
 
 def patch_local_attention():
-    """Swap the sliding-chunks forward for an export-safe band-mask one."""
+    """Swap the sliding-chunks path for an export-safe, O(T*w) functional one.
+
+    Bit-identical to the original NeMo forward in PyTorch, but rebuilt with
+    cat/pad/masked_fill only so the torchscript exporter compiles it correctly.
+    """
     import nemo.collections.asr.parts.submodules.multi_head_attention as mha
+
+    inf = 10000.0  # matches NeMo's INF_VAL
+
+    def sliding_chunks_matmul_qk(self, q, k, w, padding_value):
+        bsz, num_heads, seqlen, head_dim = q.size()
+        q = q.reshape(bsz * num_heads, seqlen, head_dim)
+        k = k.reshape(bsz * num_heads, seqlen, head_dim)
+        chunk_q = self._chunk_overlap(q, w)
+        chunk_k = self._chunk_overlap(k, w)
+        chunk_attn = torch.einsum("bcxd,bcyd->bcxy", chunk_q, chunk_k)
+        diagonal_chunk_attn = self._skew(
+            chunk_attn, direction=(0, 0, 0, 1), padding_value=padding_value
+        )
+        upper = torch.cat(
+            [
+                diagonal_chunk_attn[:, :, :w, : w + 1],
+                diagonal_chunk_attn[:, -1:, w:, : w + 1],
+            ],
+            dim=1,
+        )
+        row0_inner = diagonal_chunk_attn[:, :1, : w - 1, w + 2 : 2 * w + 1]
+        row0 = F.pad(row0_inner, (1, 0, 1, 0))
+        rest = diagonal_chunk_attn[:, :, w - 1 : 2 * w - 1, w + 1 : 2 * w + 1]
+        lower = torch.cat([row0, rest], dim=1)
+        diagonal_attn = torch.cat([lower, upper], dim=-1)
+        beginning_mask, ending_mask = self._get_invalid_locations_mask(
+            w, diagonal_attn.device
+        )
+        beg = diagonal_attn[:, :1, :, : w + 1].masked_fill(beginning_mask, -inf)
+        end = diagonal_attn[:, -1:, :, w:].masked_fill(ending_mask, -inf)
+        diagonal_attn = torch.cat(
+            [
+                torch.cat([beg, diagonal_attn[:, :1, :, w + 1 :]], dim=-1),
+                diagonal_attn[:, 1:-1],
+                torch.cat([diagonal_attn[:, -1:, :, :w], end], dim=-1),
+            ],
+            dim=1,
+        )
+        return diagonal_attn.view(bsz, num_heads, seqlen, 2 * w + 1)
 
     def forward_local(self, query, key, value, pad_mask, pos_emb, cache=None):
         key, value, query, cache = self.update_cache(
             key=key, value=value, query=query, cache=cache
         )
-        q, k, v = self.forward_qkv(query, key, value)  # (b, head, T, dk)
-        b, h, T, dk = q.size()
+        q, k, v = self.forward_qkv(query, key, value)
+        n_batch, _, T, _ = q.size()
         w = max(self.att_context_size[0], self.att_context_size[1])
+        pad_len = (2 * w - T % (2 * w)) % (2 * w)
+        q = F.pad(q, (0, 0, 0, pad_len))
+        k = F.pad(k, (0, 0, 0, pad_len))
+        v = F.pad(v, (0, 0, 0, pad_len))
+        mask = F.pad(pad_mask, (0, pad_len), value=1.0)
+        q_u = q + self.pos_bias_u.unsqueeze(1)
+        q_v = q + self.pos_bias_v.unsqueeze(1)
+        diag_ac = self.sliding_chunks_matmul_qk(q_u, k, w, padding_value=0.0)
         nbp = pos_emb.size(0)
-        pld = T - 1 - w
-        pos_pad = F.pad(pos_emb, (0, 0, pld, pld))  # (1, 2T-1, d_model)
-        p = self.linear_pos(pos_pad).view(nbp, -1, self.h, self.d_k).transpose(1, 2)
-        q_t = q.transpose(1, 2)
-        q_u = (q_t + self.pos_bias_u).transpose(1, 2)
-        q_v = (q_t + self.pos_bias_v).transpose(1, 2)
-        mac = torch.matmul(q_u, k.transpose(-2, -1))
-        mbd = torch.matmul(q_v, p.transpose(-2, -1))
-        mbd = self.rel_shift(mbd)
-        mbd = mbd[:, :, :, :T]
-        scores = (mac + mbd) / self.s_d_k
-        idx = torch.arange(T, device=q.device, dtype=q.dtype)
-        band = ((idx[:, None] - idx[None, :]).abs() > w).unsqueeze(0)
-        if pad_mask is not None:
-            pm = pad_mask.bool()
-            key_mask = pm.unsqueeze(1).expand(b, T, T) if pm.dim() == 2 else pm
-            mask = key_mask | band
-        else:
-            mask = band.expand(b, T, T)
-        out = self.forward_attention(v, scores, mask)
-        return out if cache is None else (out, cache)
+        p = self.linear_pos(pos_emb).view(nbp, -1, self.h, self.d_k).transpose(1, 2)
+        diag_bd = torch.matmul(q_v, p.transpose(-2, -1))
+        L = self.att_context_size[0]
+        R = self.att_context_size[1]
+        diag_ac = torch.cat(
+            [
+                diag_ac[:, :, :, :L] + diag_bd[:, :, :, :L],
+                diag_ac[:, :, :, L : 2 * w - R],
+                diag_ac[:, :, :, 2 * w - R :] + diag_bd[:, :, :, L:],
+            ],
+            dim=-1,
+        )
+        scores = diag_ac / self.s_d_k
+        start_pos = w - L
+        end_pos = w + R
+        if start_pos > 0:
+            scores = torch.cat(
+                [
+                    torch.full_like(scores[:, :, :, :start_pos], -inf),
+                    scores[:, :, :, start_pos:],
+                ],
+                dim=-1,
+            )
+        if end_pos < 2 * w:
+            scores = torch.cat(
+                [
+                    scores[:, :, :, : end_pos + 1],
+                    torch.full_like(scores[:, :, :, end_pos + 1 :], -inf),
+                ],
+                dim=-1,
+            )
+        mask = mask.unsqueeze(1).unsqueeze(-1)
+        float_mask = mask.type_as(scores).masked_fill(mask, -inf)
+        ones = float_mask.new_ones(float_mask.size())
+        d_mask = self.sliding_chunks_matmul_qk(ones, float_mask, w, padding_value=0.0)
+        scores = scores + d_mask
+        attn = torch.softmax(scores, dim=-1).masked_fill(mask, 0.0)
+        p_attn = self.dropout(attn)
+        out = self.sliding_chunks_matmul_pv(p_attn, v, w)
+        out = out.reshape(n_batch, -1, self.h * self.d_k)[:, :T]
+        ret = self.linear_out(out)
+        return ret if cache is None else (ret, cache)
 
+    mha.RelPositionMultiHeadAttentionLongformer.sliding_chunks_matmul_qk = (
+        sliding_chunks_matmul_qk
+    )
     mha.RelPositionMultiHeadAttentionLongformer.forward = forward_local
 
 
