@@ -43,4 +43,6 @@ docker build -f "$root/export/asr/Dockerfile.models" -t "$image:$tag" "$stage"
 
 if [ "$push" = "--push" ]; then
   docker push "$image:$tag"
+  docker tag "$image:$tag" "$image:latest"
+  docker push "$image:latest"
 fi

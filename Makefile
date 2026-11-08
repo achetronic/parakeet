@@ -149,7 +149,7 @@ model-export-asr: ## Regenerate ASR ONNX assets from the NVIDIA checkpoint
 # The model images carry the ASR encoder+decoder split (int8/fp32). They are
 # ASR-specific for now; a future family gets its own image targets if needed.
 MODEL_IMAGE_REPO ?= ghcr.io/achetronic/parakeet-models-asr
-MODEL_TAG ?= v0.10.0
+MODEL_TAG ?= latest
 
 model-build-oci-images: model-export-asr ## Build int8 + fp32 model images locally (no push)
 	@./export/asr/build-image.sh int8 "$(MODEL_IMAGE_REPO)-int8" "$(MODEL_TAG)"

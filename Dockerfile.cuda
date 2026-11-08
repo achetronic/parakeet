@@ -18,7 +18,7 @@ ARG GO_VERSION=1.25.5
 ARG CUDA_RUNTIME_IMAGE=nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04
 ARG CUDA_DEVEL_IMAGE=nvidia/cuda:12.6.3-cudnn-devel-ubuntu22.04
 ARG MODEL_PRECISION=fp32
-ARG MODEL_VERSION=v0.10.0
+ARG MODEL_VERSION=latest
 
 # Build stage - on the CUDA devel base so the build glibc matches the runtime
 FROM ${CUDA_DEVEL_IMAGE} AS builder

@@ -1,7 +1,7 @@
 # Global build args. MODEL_PRECISION selects int8/fp32; MODEL_VERSION pins the
 # OCI model image version (see export-models workflow).
 ARG MODEL_PRECISION=int8
-ARG MODEL_VERSION=v0.10.0
+ARG MODEL_VERSION=latest
 
 # Build stage - using debian for CGO support (required by onnxruntime_go)
 FROM golang:1.25-bookworm AS builder
