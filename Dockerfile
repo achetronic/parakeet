@@ -35,7 +35,7 @@ COPY . .
 RUN go build -ldflags="-s -w" -o parakeet .
 
 # ASR models come from our OCI image (distribution: both full and local).
-FROM ghcr.io/achetronic/parakeet-models-asr-${MODEL_PRECISION}:${MODEL_VERSION} AS asr-models
+FROM --platform=$BUILDPLATFORM ghcr.io/achetronic/parakeet-models-asr-${MODEL_PRECISION}:${MODEL_VERSION} AS asr-models
 
 # Models stage: assembles the family-first layout. ASR is copied from the image
 # above (only the local encoder is kept); VAD and diarization are downloaded via
