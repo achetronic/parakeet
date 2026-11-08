@@ -4,14 +4,19 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: 'Version ref for the model image tags (e.g. v1.2.3)'
+        description: 'Git ref to export (ignored when use_master is set)'
         type: string
         required: true
       use_master:
-        description: 'Export from master instead of the version ref'
+        description: 'Export from master instead of the ref'
         type: boolean
         required: false
         default: false
+      image_tag:
+        description: 'Custom tag for the images (defaults to the ref). Set it to publish models early.'
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -47,4 +52,4 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Export and push model images
-        run: make MODEL_TAG="${{ github.event.inputs.ref }}" model-push-oci-images
+        run: make MODEL_TAG="${{ github.event.inputs.image_tag || github.event.inputs.ref }}" model-push-oci-images
