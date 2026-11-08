@@ -23,8 +23,14 @@ DOCKER_TAG ?= $(VERSION)
 # Directories
 MODELS_DIR := ./models
 
+# crane pulls and unpacks OCI images without Docker. It is a single static
+# binary from google/go-containerregistry, fetched on first use into $(BIN_DIR).
+CRANE_VERSION ?= v0.20.2
+CRANE := $(BIN_DIR)/crane
+
 .PHONY: all build clean test fmt vet lint run help
 .PHONY: docker-build-int8 docker-build-fp32 docker-build-cuda docker-run-int8 docker-run-fp32 docker-run-cuda docker-push
+.PHONY: crane
 .PHONY: model-download model-download-asr model-download-asr-int8 model-download-asr-fp32 model-download-vad model-download-diarization model-download-diarization-int8 model-download-diarization-fp32
 .PHONY: model-export-asr-venv model-export-asr model-build-oci-images model-push-oci-images
 .PHONY: release release-linux release-darwin release-windows
@@ -170,24 +176,39 @@ MODELS_ASR_INT8_DIR := $(MODELS_DIR)/asr/int8
 MODELS_ASR_FP32_DIR := $(MODELS_DIR)/asr/fp32
 MODELS_VAD_DIR := $(MODELS_DIR)/vad
 
+# Docker-free pull of the ASR model images (issue #44). Supported platforms:
+# Linux and macOS on amd64/arm64. Windows users can keep using Docker.
+crane: $(CRANE) ## Download crane (OCI image exporter) if needed
+$(CRANE): $(BIN_DIR)
+	@OS=$$(uname -s); \
+	ARCH=$$(uname -m); \
+	case "$$OS-$$ARCH" in \
+		Linux-x86_64) ASSET="Linux_x86_64" ;; \
+		Linux-aarch64) ASSET="Linux_arm64" ;; \
+		Darwin-x86_64) ASSET="Darwin_x86_64" ;; \
+		Darwin-arm64) ASSET="Darwin_arm64" ;; \
+		*) echo "Unsupported platform for crane: $$OS-$$ARCH" >&2; exit 1 ;; \
+	esac; \
+	echo "Downloading crane $(CRANE_VERSION) ($$ASSET) ..."; \
+	tmp="$(BIN_DIR)/go-containerregistry-$(CRANE_VERSION).tar.gz"; \
+	curl -fL "https://github.com/google/go-containerregistry/releases/download/$(CRANE_VERSION)/go-containerregistry_$$ASSET.tar.gz" -o "$$tmp" || { echo "Failed to download crane" >&2; exit 1; }; \
+	tar -xzf "$$tmp" -C "$(BIN_DIR)" crane; \
+	rm -f "$$tmp"; \
+	chmod +x "$(CRANE)"; \
+	echo "crane installed to $(CRANE)"
+
 model-download: model-download-asr model-download-vad model-download-diarization ## Download every model (ASR, VAD, diarization, both precisions)
 
 model-download-asr: model-download-asr-int8 model-download-asr-fp32 ## Download ASR models (int8 + fp32)
 
-model-download-asr-int8: ## Download ASR int8 models from GHCR (~670MB)
+model-download-asr-int8: crane ## Download ASR int8 models from GHCR (~670MB)
 	@mkdir -p $(MODELS_ASR_INT8_DIR)
-	@docker pull "$(MODEL_IMAGE_REPO)-int8:$(MODEL_TAG)"
-	@cid=$$(docker create "$(MODEL_IMAGE_REPO)-int8:$(MODEL_TAG)"); \
-	 docker cp "$$cid:/models/." $(MODELS_ASR_INT8_DIR)/ && \
-	 docker rm "$$cid" >/dev/null
+	@bash -o pipefail -c '"$(CRANE)" export --platform linux/amd64 "$(MODEL_IMAGE_REPO)-int8:$(MODEL_TAG)" - | tar -x -C "$(MODELS_ASR_INT8_DIR)" --strip-components=1 models'
 	@echo "ASR int8 models extracted to $(MODELS_ASR_INT8_DIR)"
 
-model-download-asr-fp32: ## Download ASR fp32 models from GHCR (~2.5GB)
+model-download-asr-fp32: crane ## Download ASR fp32 models from GHCR (~2.5GB)
 	@mkdir -p $(MODELS_ASR_FP32_DIR)
-	@docker pull "$(MODEL_IMAGE_REPO)-fp32:$(MODEL_TAG)"
-	@cid=$$(docker create "$(MODEL_IMAGE_REPO)-fp32:$(MODEL_TAG)"); \
-	 docker cp "$$cid:/models/." $(MODELS_ASR_FP32_DIR)/ && \
-	 docker rm "$$cid" >/dev/null
+	@bash -o pipefail -c '"$(CRANE)" export --platform linux/amd64 "$(MODEL_IMAGE_REPO)-fp32:$(MODEL_TAG)" - | tar -x -C "$(MODELS_ASR_FP32_DIR)" --strip-components=1 models'
 	@echo "ASR fp32 models extracted to $(MODELS_ASR_FP32_DIR)"
 
 # Silero VAD model for chunk-boundary selection (long-audio mode). Pinned to a
@@ -318,6 +339,7 @@ help: ## Show this help message
 	@echo "  \033[36mmodel-export-asr\033[0m  Regenerate ASR ONNX assets from the NVIDIA checkpoint"
 	@echo "  \033[36mmodel-build-oci-images\033[0m  Build int8 + fp32 model images locally"
 	@echo "  \033[36mmodel-push-oci-images\033[0m  Build and push int8 + fp32 model images to GHCR"
+	@echo "  \033[36mcrane\033[0m  Download crane (OCI image exporter) if needed"
 	@echo "  \033[36mmodel-download\033[0m  Download every model (ASR + VAD + diarization, both precisions)"
 	@echo "  \033[36mmodel-download-asr\033[0m  Download ASR models (int8 + fp32)"
 	@echo "  \033[36mmodel-download-asr-int8\033[0m  Download ASR int8 models from GHCR (~670MB)"
