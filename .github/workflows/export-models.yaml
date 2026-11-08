@@ -4,16 +4,17 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: 'Git ref to export (ignored when use_master is set)'
+        description: 'Git ref to export (defaults to master)'
         type: string
-        required: true
+        required: false
+        default: ''
       use_master:
         description: 'Export from master instead of the ref'
         type: boolean
         required: false
         default: false
       image_tag:
-        description: 'Custom tag for the images (defaults to the ref). Set it to publish models early.'
+        description: 'Custom tag for the images (defaults to the ref)'
         type: string
         required: false
         default: ''
@@ -32,7 +33,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ (github.event.inputs.use_master == 'true') && 'master' || github.event.inputs.ref }}
+          ref: ${{ (github.event.inputs.use_master == 'true') && 'master' || (github.event.inputs.ref || 'master') }}
 
       - uses: actions/setup-python@v5
         with:
@@ -52,4 +53,4 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Export and push model images
-        run: make MODEL_TAG="${{ github.event.inputs.image_tag || github.event.inputs.ref }}" model-push-oci-images
+        run: make MODEL_TAG="${{ github.event.inputs.image_tag || github.event.inputs.ref || 'latest' }}" model-push-oci-images
