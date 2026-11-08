@@ -21,15 +21,12 @@ cp "$assets/config.json" "$assets/vocab.txt" "$stage/"
 case "$mode" in
   int8)
     cp "$assets/encoder-model.int8.onnx" \
-       "$assets/encoder-local.int8.onnx" \
        "$assets/decoder_joint-model.int8.onnx" \
        "$stage/"
     ;;
   fp32)
     cp "$assets/encoder-model.onnx" \
        "$assets/encoder-model.onnx.data" \
-       "$assets/encoder-local.onnx" \
-       "$assets/encoder-local.onnx.data" \
        "$assets/decoder_joint-model.onnx" \
        "$stage/"
     ;;

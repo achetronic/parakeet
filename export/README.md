@@ -27,10 +27,8 @@ Written to `export/asr/assets/`:
 | `config.json`                   | model config                                         |
 | `vocab.txt`                     | SentencePiece vocab + `<blk>` blank, 8193 lines      |
 | `nemo128.onnx`                  | mel preprocessor, test reference only                |
-| `encoder-model.onnx` + `.data`  | fp32 encoder, full attention                         |
-| `encoder-model.int8.onnx`       | int8 encoder, full attention                         |
-| `encoder-local.onnx` + `.data`  | fp32 encoder, local attention (`rel_pos_local_attn`) |
-| `encoder-local.int8.onnx`       | int8 encoder, local attention                        |
+| `encoder-model.onnx` + `.data`  | fp32 encoder, local attention (`rel_pos_local_attn`) |
+| `encoder-model.int8.onnx`       | int8 encoder, local attention                        |
 | `decoder_joint-model.onnx`      | fp32 decoder + joint                                 |
 | `decoder_joint-model.int8.onnx` | int8 decoder + joint                                 |
 | `manifest.txt`                  | sha256 of every artifact                             |
@@ -73,12 +71,12 @@ export/venv/bin/python export/asr/export.py
 ## Model images
 
 The assets are shipped as OCI images on GitHub Container Registry. Two images,
-each with both attention modes inside:
+one per precision, each with the local-attention encoder and the decoder:
 
 | image                                     | contents                        |
 | ----------------------------------------- | ------------------------------- |
-| `ghcr.io/achetronic/parakeet-models-asr-int8` | int8 encoders + decoder + vocab |
-| `ghcr.io/achetronic/parakeet-models-asr-fp32` | fp32 encoders + decoder + vocab |
+| `ghcr.io/achetronic/parakeet-models-asr-int8` | int8 encoder + decoder + vocab |
+| `ghcr.io/achetronic/parakeet-models-asr-fp32` | fp32 encoder + decoder + vocab |
 
 Build locally without pushing:
 

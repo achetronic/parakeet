@@ -26,7 +26,6 @@ func main() {
 	flag.IntVar(&cfg.Port, "port", 5092, "Server port")
 	flag.StringVar(&cfg.ModelsDir, "models", "./models", "Models directory (organized by family: asr/, vad/, diarization/)")
 	flag.StringVar(&cfg.ModelPrecision, "model-precision", "int8", "Model precision: int8 or fp32")
-	flag.StringVar(&cfg.Attention, "attention", "full", "ASR encoder attention: full or local (rel_pos_local_attn)")
 	flag.StringVar(&cfg.LogLevel, "log-level", "info", "Log level: debug, info, warn, error")
 	flag.StringVar(&cfg.LogFormat, "log-format", "text", "Log format: text or json")
 	flag.IntVar(&cfg.Workers, "workers", 4, "Number of concurrent inference workers (each uses ~670MB RAM for int8 models)")

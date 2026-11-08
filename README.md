@@ -307,7 +307,6 @@ start instead of silently falling back to CPU.
 | `-port`                       | HTTP server port                                                         | `5092`                     | `-port 8080`                           |
 | `-models`                     | Path to models directory (organized by family)                          | `./models`                 | `-models /opt/parakeet/models`         |
 | `-model-precision`            | Model precision: `int8` or `fp32`                                       | `int8`                     | `-model-precision fp32`               |
-| `-attention`                  | ASR encoder attention: `full` or `local` (rel_pos_local_attn)           | `full`                     | `-attention local`                     |
 | `-log-level`                  | Log level: debug, info, warn, error                                      | `info`                     | `-log-level debug`                     |
 | `-log-format`                 | Log output format: text or json                                          | `text`                     | `-log-format json`                     |
 | `-workers`                    | Concurrent transcriptions (each ~670MB RAM/VRAM for int8)                | `4`                        | `-workers 2`                           |

@@ -6,10 +6,8 @@ Writes to --out (default: assets/ next to this script):
     config.json                  model config (generated)
     vocab.txt                    SentencePiece vocab + <blk> blank (8193 lines)
     nemo128.onnx                 mel preprocessor (test reference only)
-    encoder-model.onnx(.data)    fp32 encoder, full attention
-    encoder-model.int8.onnx      int8 encoder, full attention
-    encoder-local.onnx(.data)    fp32 encoder, local attention (rel_pos_local_attn)
-    encoder-local.int8.onnx      int8 encoder, local attention
+    encoder-model.onnx(.data)    fp32 encoder, local attention (rel_pos_local_attn)
+    encoder-model.int8.onnx      int8 encoder, local attention
     decoder_joint-model.onnx     fp32 decoder + joint
     decoder_joint-model.int8.onnx  int8 decoder + joint
     manifest.txt                 sha256 of every artifact
@@ -202,33 +200,28 @@ def quantize(src_onnx, dst_onnx):
     log(f"  int8 -> {os.path.basename(dst_onnx)}")
 
 
-def export_encoder(model, out, local_attention, att_context=(256, 256)):
-    tag = "local" if local_attention else "full"
-    log(f"exporting encoder ({tag} attention)...")
-
-    if local_attention:
-        patch_local_attention()
-        model.change_attention_model(
-            self_attention_model="rel_pos_local_attn",
-            att_context_size=list(att_context),
-        )
-        model.eval()
+def export_encoder(model, out, att_context=(256, 256)):
+    log("exporting encoder (local attention)...")
+    patch_local_attention()
+    model.change_attention_model(
+        self_attention_model="rel_pos_local_attn",
+        att_context_size=list(att_context),
+    )
+    model.eval()
 
     with tempfile.TemporaryDirectory(dir=os.path.abspath(out)) as tmp:
         model.export(output=os.path.join(tmp, "parakeet.onnx"))
         enc = glob.glob(os.path.join(tmp, "encoder-*.onnx"))[0]
         dec = glob.glob(os.path.join(tmp, "decoder_joint-*.onnx"))[0]
 
-        prefix = "encoder-local" if local_attention else "encoder-model"
-        fp32_dst = os.path.join(out, prefix + ".onnx")
+        fp32_dst = os.path.join(out, "encoder-model.onnx")
         consolidate_external_data(enc, fp32_dst)
-        quantize(fp32_dst, os.path.join(out, prefix + ".int8.onnx"))
+        quantize(fp32_dst, os.path.join(out, "encoder-model.int8.onnx"))
 
-        # Decoder is identical across attention modes; keep one copy.
         dec_dst = os.path.join(out, "decoder_joint-model.onnx")
         shutil.copy(dec, dec_dst)
         quantize(dec, os.path.join(out, "decoder_joint-model.int8.onnx"))
-    log(f"encoder {tag} OK")
+    log("encoder OK")
 
 
 def write_manifest(out):
@@ -259,8 +252,7 @@ def main():
     export_config(args.out)
     export_preprocessor(model, args.out)
 
-    export_encoder(model, args.out, local_attention=False)
-    export_encoder(model, args.out, local_attention=True)
+    export_encoder(model, args.out)
 
     write_manifest(args.out)
     log(f"done. assets in {args.out}")

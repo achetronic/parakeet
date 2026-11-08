@@ -116,7 +116,7 @@ parakeet/
 
 ### `main.go` (Entry Point)
 
-- Parses CLI flags: `-port`, `-models`, `-model-precision`, `-attention`, `-log-level`, `-log-format`, `-workers`, `-ffmpeg`, `-ffmpeg-path`, `-ffmpeg-timeout`, `-gpu`, `-gpu-devices`, `-chunk-seconds`, `-chunk-overlap-seconds`, `-long-audio`, `-disable-vad-based-chunking`, `-disable-mel-based-chunking`, `-vad-model-path`, `-enable-diarization`
+- Parses CLI flags: `-port`, `-models`, `-model-precision`, `-log-level`, `-log-format`, `-workers`, `-ffmpeg`, `-ffmpeg-path`, `-ffmpeg-timeout`, `-gpu`, `-gpu-devices`, `-chunk-seconds`, `-chunk-overlap-seconds`, `-long-audio`, `-disable-vad-based-chunking`, `-disable-mel-based-chunking`, `-vad-model-path`, `-enable-diarization`
 - Configures `slog` global logger (text or JSON handler, four log levels)
 - Runs server in background goroutine, listens for SIGINT/SIGTERM
 - Graceful shutdown: waits up to 30s for in-flight requests via `http.Server.Shutdown`
@@ -288,7 +288,6 @@ parakeet/
 | `PARAKEET_GPU`        | Execution provider: `cpu` or `cuda`         | `cpu`                 |
 | `PARAKEET_GPU_DEVICES` | Comma-separated CUDA device ids to spread workers over | `0`    |
 | `PARAKEET_MODEL_PRECISION` | Model precision: `int8` or `fp32`   | `int8`               |
-| `PARAKEET_ATTENTION`      | ASR encoder attention: `full` or `local` | `full`              |
 | `PARAKEET_LONG_AUDIO` | Split over-limit audio into overlapping chunks | `false`             |
 | `PARAKEET_CHUNK_SECONDS` | Sliding-window size in seconds | `60`                 |
 | `PARAKEET_CHUNK_OVERLAP_SECONDS` | Overlap between chunks in seconds | `15`                  |
