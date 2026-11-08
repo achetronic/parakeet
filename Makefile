@@ -149,7 +149,7 @@ model-export-asr: ## Regenerate ASR ONNX assets from the NVIDIA checkpoint
 # The model images carry the ASR encoder+decoder split (int8/fp32). They are
 # ASR-specific for now; a future family gets its own image targets if needed.
 MODEL_IMAGE_REPO ?= ghcr.io/achetronic/parakeet-models-asr
-MODEL_TAG ?= latest
+MODEL_TAG ?= v0.10.0
 
 model-build-oci-images: model-export-asr ## Build int8 + fp32 model images locally (no push)
 	@./export/asr/build-image.sh int8 "$(MODEL_IMAGE_REPO)-int8" "$(MODEL_TAG)"
@@ -164,9 +164,8 @@ model-push-oci-images: model-export-asr ## Build and push int8 + fp32 model imag
 #   models/asr/{int8,fp32}, models/vad, models/diarization/{int8,fp32}.
 # VAD has no precision. model-download pulls everything.
 
-# ASR encoder + decoder assets. Default to the community conversion; point
-# MODELS_REPO at your own repo to self-host (see export/README.md).
-MODELS_REPO ?= istupakov/parakeet-tdt-0.6b-v3-onnx
+# ASR encoder + decoder assets are pulled from our own OCI images on GHCR
+# (see export/README.md). MODEL_TAG pins the version.
 MODELS_ASR_INT8_DIR := $(MODELS_DIR)/asr/int8
 MODELS_ASR_FP32_DIR := $(MODELS_DIR)/asr/fp32
 MODELS_VAD_DIR := $(MODELS_DIR)/vad
@@ -175,26 +174,21 @@ model-download: model-download-asr model-download-vad model-download-diarization
 
 model-download-asr: model-download-asr-int8 model-download-asr-fp32 ## Download ASR models (int8 + fp32)
 
-model-download-asr-int8: ## Download ASR int8 models (~670MB)
+model-download-asr-int8: ## Download ASR int8 models from GHCR (~670MB)
 	@mkdir -p $(MODELS_ASR_INT8_DIR)
-	@echo "Downloading Parakeet TDT int8 models from https://huggingface.co/$(MODELS_REPO) ..."
-	@curl -L -o $(MODELS_ASR_INT8_DIR)/config.json "https://huggingface.co/$(MODELS_REPO)/resolve/main/config.json"
-	@curl -L -o $(MODELS_ASR_INT8_DIR)/vocab.txt "https://huggingface.co/$(MODELS_REPO)/resolve/main/vocab.txt"
-	@curl -L -o $(MODELS_ASR_INT8_DIR)/nemo128.onnx "https://huggingface.co/$(MODELS_REPO)/resolve/main/nemo128.onnx"
-	@curl -L -o $(MODELS_ASR_INT8_DIR)/encoder-model.int8.onnx "https://huggingface.co/$(MODELS_REPO)/resolve/main/encoder-model.int8.onnx"
-	@curl -L -o $(MODELS_ASR_INT8_DIR)/decoder_joint-model.int8.onnx "https://huggingface.co/$(MODELS_REPO)/resolve/main/decoder_joint-model.int8.onnx"
-	@echo "ASR int8 models downloaded to $(MODELS_ASR_INT8_DIR)"
+	@docker pull "$(MODEL_IMAGE_REPO)-int8:$(MODEL_TAG)"
+	@cid=$$(docker create "$(MODEL_IMAGE_REPO)-int8:$(MODEL_TAG)"); \
+	 docker cp "$$cid:/models/." $(MODELS_ASR_INT8_DIR)/ && \
+	 docker rm "$$cid" >/dev/null
+	@echo "ASR int8 models extracted to $(MODELS_ASR_INT8_DIR)"
 
-model-download-asr-fp32: ## Download ASR fp32 models (~2.5GB)
+model-download-asr-fp32: ## Download ASR fp32 models from GHCR (~2.5GB)
 	@mkdir -p $(MODELS_ASR_FP32_DIR)
-	@echo "Downloading Parakeet TDT fp32 models from https://huggingface.co/$(MODELS_REPO) ..."
-	@curl -L -o $(MODELS_ASR_FP32_DIR)/config.json "https://huggingface.co/$(MODELS_REPO)/resolve/main/config.json"
-	@curl -L -o $(MODELS_ASR_FP32_DIR)/vocab.txt "https://huggingface.co/$(MODELS_REPO)/resolve/main/vocab.txt"
-	@curl -L -o $(MODELS_ASR_FP32_DIR)/nemo128.onnx "https://huggingface.co/$(MODELS_REPO)/resolve/main/nemo128.onnx"
-	@curl -L -o $(MODELS_ASR_FP32_DIR)/encoder-model.onnx "https://huggingface.co/$(MODELS_REPO)/resolve/main/encoder-model.onnx"
-	@curl -L -o $(MODELS_ASR_FP32_DIR)/encoder-model.onnx.data "https://huggingface.co/$(MODELS_REPO)/resolve/main/encoder-model.onnx.data"
-	@curl -L -o $(MODELS_ASR_FP32_DIR)/decoder_joint-model.onnx "https://huggingface.co/$(MODELS_REPO)/resolve/main/decoder_joint-model.onnx"
-	@echo "ASR fp32 models downloaded to $(MODELS_ASR_FP32_DIR)"
+	@docker pull "$(MODEL_IMAGE_REPO)-fp32:$(MODEL_TAG)"
+	@cid=$$(docker create "$(MODEL_IMAGE_REPO)-fp32:$(MODEL_TAG)"); \
+	 docker cp "$$cid:/models/." $(MODELS_ASR_FP32_DIR)/ && \
+	 docker rm "$$cid" >/dev/null
+	@echo "ASR fp32 models extracted to $(MODELS_ASR_FP32_DIR)"
 
 # Silero VAD model for chunk-boundary selection (long-audio mode). Pinned to a
 # specific release tag and sha256 so the download is reproducible and verified.
@@ -326,8 +320,8 @@ help: ## Show this help message
 	@echo "  \033[36mmodel-push-oci-images\033[0m  Build and push int8 + fp32 model images to GHCR"
 	@echo "  \033[36mmodel-download\033[0m  Download every model (ASR + VAD + diarization, both precisions)"
 	@echo "  \033[36mmodel-download-asr\033[0m  Download ASR models (int8 + fp32)"
-	@echo "  \033[36mmodel-download-asr-int8\033[0m  Download ASR int8 models (~670MB)"
-	@echo "  \033[36mmodel-download-asr-fp32\033[0m  Download ASR fp32 models (~2.5GB)"
+	@echo "  \033[36mmodel-download-asr-int8\033[0m  Download ASR int8 models from GHCR (~670MB)"
+	@echo "  \033[36mmodel-download-asr-fp32\033[0m  Download ASR fp32 models from GHCR (~2.5GB)"
 	@echo "  \033[36mmodel-download-vad\033[0m  Download and verify the Silero VAD model (MIT)"
 	@echo "  \033[36mmodel-download-diarization\033[0m  Download diarization models (int8 + fp32)"
 	@echo "  \033[36mmodel-download-diarization-int8\033[0m  Download int8 diarization model (~120MB)"

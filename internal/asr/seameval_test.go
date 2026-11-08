@@ -322,7 +322,7 @@ func seamSeconds(tr *Transcriber, samples []float32) []float64 {
 	subsampling := int64(tr.config.SubsamplingFactor)
 	oracle := tr.newBoundaryOracle(features, samples)
 	plan, err := planForAudioWithBoundaries(
-		int64(len(features)), tr.chunkFrames, tr.overlapFrames, subsampling, true, oracle)
+		int64(len(features)), tr.chunkFrames, tr.overlapFrames, subsampling, tr.maxEncoderFrames, true, oracle)
 	if err != nil {
 		return nil
 	}

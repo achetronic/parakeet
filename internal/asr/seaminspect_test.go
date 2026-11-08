@@ -86,7 +86,7 @@ func TestSeamInspection(t *testing.T) {
 	frameSeconds := float64(subsampling) / fps
 
 	oracle := tr.newBoundaryOracle(features, waveform)
-	plan, err := planForAudioWithBoundaries(int64(len(features)), tr.chunkFrames, tr.overlapFrames, subsampling, true, oracle)
+	plan, err := planForAudioWithBoundaries(int64(len(features)), tr.chunkFrames, tr.overlapFrames, subsampling, tr.maxEncoderFrames, true, oracle)
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}

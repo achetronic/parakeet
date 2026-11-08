@@ -56,6 +56,10 @@ type Config struct {
 	// It picks models/<family>/<precision> under ModelsDir.
 	ModelPrecision string
 
+	// Attention selects the ASR encoder: "full" (default) or "local"
+	// (rel_pos_local_attn). Local lifts the single-pass positional-table limit.
+	Attention string
+
 	// FFmpegEnabled toggles the ffmpeg-backed fallback for non-WAV audio.
 	// When true, unknown input formats are transcoded to 16 kHz mono WAV
 	// before transcription. When false, only WAV input is accepted.
@@ -124,6 +128,9 @@ func New(cfg Config) (*Server, error) {
 	if cfg.ModelPrecision != "int8" && cfg.ModelPrecision != "fp32" {
 		return nil, fmt.Errorf("invalid model precision %q: must be int8 or fp32", cfg.ModelPrecision)
 	}
+	if cfg.Attention != "" && cfg.Attention != "full" && cfg.Attention != "local" {
+		return nil, fmt.Errorf("invalid attention %q: must be full or local", cfg.Attention)
+	}
 
 	converter := audio.NewConverter(audio.FFmpegConfig{
 		Enabled:    cfg.FFmpegEnabled,
@@ -153,6 +160,7 @@ func New(cfg Config) (*Server, error) {
 			DisableMel:   cfg.DisableMelBasedChunking,
 			VADModelPath: vadPath,
 		},
+		Attention: cfg.Attention,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize transcriber: %w", err)

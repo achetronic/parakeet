@@ -123,7 +123,7 @@ func TestValidateChunking(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateChunking(tt.chunkFrames, tt.overlapFrames, subsampling)
+			err := validateChunking(tt.chunkFrames, tt.overlapFrames, subsampling, modelMaxEncoderFrames)
 
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("validateChunking(%d,%d) err = %v, wantErr %v", tt.chunkFrames, tt.overlapFrames, err, tt.wantErr)
@@ -143,7 +143,7 @@ func TestPlanForAudio(t *testing.T) {
 		overLimit  = 40008
 	)
 	t.Run("long audio off, short audio, single window", func(t *testing.T) {
-		plan, err := planForAudio(underLimit, chunk, overlap, subsampling, false)
+		plan, err := planForAudio(underLimit, chunk, overlap, subsampling, modelMaxEncoderFrames, false)
 
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -154,7 +154,7 @@ func TestPlanForAudio(t *testing.T) {
 	})
 
 	t.Run("long audio off, long audio, rejected", func(t *testing.T) {
-		_, err := planForAudio(overLimit, chunk, overlap, subsampling, false)
+		_, err := planForAudio(overLimit, chunk, overlap, subsampling, modelMaxEncoderFrames, false)
 
 		if !errors.Is(err, ErrAudioTooLong) {
 			t.Fatalf("want ErrAudioTooLong, got %v", err)
@@ -162,7 +162,7 @@ func TestPlanForAudio(t *testing.T) {
 	})
 
 	t.Run("long audio on, long audio, chunked", func(t *testing.T) {
-		plan, err := planForAudio(overLimit*3, chunk, overlap, subsampling, true)
+		plan, err := planForAudio(overLimit*3, chunk, overlap, subsampling, modelMaxEncoderFrames, true)
 
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -173,7 +173,7 @@ func TestPlanForAudio(t *testing.T) {
 	})
 
 	t.Run("long audio on, short audio, single window", func(t *testing.T) {
-		plan, err := planForAudio(1000, chunk, overlap, subsampling, true)
+		plan, err := planForAudio(1000, chunk, overlap, subsampling, modelMaxEncoderFrames, true)
 
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)

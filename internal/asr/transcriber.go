@@ -212,6 +212,7 @@ type Transcriber struct {
 	maxTokensPerStep   int
 	chunkFrames        int64
 	overlapFrames      int64
+	maxEncoderFrames   int64
 	longAudio          bool
 	disableVADChunking bool
 	disableMelChunking bool
@@ -231,6 +232,9 @@ type Options struct {
 	GPU      GPUConfig
 	Chunk    ChunkConfig
 	Boundary BoundaryConfig
+	// Attention selects the encoder: "full" (default) or "local"
+	// (rel_pos_local_attn). Empty means full.
+	Attention string
 }
 
 // ChunkConfig sets the sliding-window sizes that keep long audio within the
@@ -306,10 +310,18 @@ func buildSessionOptionsForDevice(provider Provider, deviceID int) (*ort.Session
 // When opts.FFmpeg is non-nil, non-WAV inputs are transcoded on the fly.
 // Otherwise only WAV is accepted and non-WAV inputs return audio.ErrUnsupportedAudio.
 func NewTranscriber(modelsDir string, workers int, opts Options) (*Transcriber, error) {
+	attention := opts.Attention
+	if attention == "" {
+		attention = "full"
+	}
 	t := &Transcriber{
 		maxTokensPerStep: 10,
 		blankIdx:         8192,
 		ffmpeg:           opts.FFmpeg,
+		maxEncoderFrames: modelMaxEncoderFrames,
+	}
+	if attention == "local" {
+		t.maxEncoderFrames = localMaxEncoderFrames
 	}
 
 	// Load config
@@ -355,7 +367,7 @@ func NewTranscriber(modelsDir string, workers int, opts Options) (*Transcriber, 
 	t.disableVADChunking = opts.Boundary.DisableVAD
 	t.disableMelChunking = opts.Boundary.DisableMel
 	if t.longAudio {
-		if err := validateChunking(t.chunkFrames, t.overlapFrames, int64(t.config.SubsamplingFactor)); err != nil {
+		if err := validateChunking(t.chunkFrames, t.overlapFrames, int64(t.config.SubsamplingFactor), t.maxEncoderFrames); err != nil {
 			return nil, fmt.Errorf("invalid chunk configuration: %w", err)
 		}
 	}
@@ -369,11 +381,15 @@ func NewTranscriber(modelsDir string, workers int, opts Options) (*Transcriber, 
 	t.envInit = envInit
 
 	// Resolve encoder path
-	encoderPath := filepath.Join(modelsDir, "encoder-model.int8.onnx")
+	encBase := "encoder-model"
+	if attention == "local" {
+		encBase = "encoder-local"
+	}
+	encoderPath := filepath.Join(modelsDir, encBase+".int8.onnx")
 	if _, err := os.Stat(encoderPath); os.IsNotExist(err) {
-		encoderPath = filepath.Join(modelsDir, "encoder-model.onnx")
+		encoderPath = filepath.Join(modelsDir, encBase+".onnx")
 		if _, err := os.Stat(encoderPath); os.IsNotExist(err) {
-			return nil, fmt.Errorf("encoder model not found. Download from https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx")
+			return nil, fmt.Errorf("encoder model not found (%s); run 'make model-download-asr-int8' or 'make model-download-asr-fp32'", encBase)
 		}
 	}
 
@@ -673,11 +689,11 @@ func (t *Transcriber) transcribeSamples(ctx context.Context, waveform []float32,
 	// request's data and plan the chunk windows with it. When long-audio is off
 	// the oracle is unused (single window or ErrAudioTooLong).
 	oracle := t.newBoundaryOracle(features, waveform)
-	plan, err := planForAudioWithBoundaries(int64(len(features)), t.chunkFrames, t.overlapFrames, subsampling, t.longAudio, oracle)
+	plan, err := planForAudioWithBoundaries(int64(len(features)), t.chunkFrames, t.overlapFrames, subsampling, t.maxEncoderFrames, t.longAudio, oracle)
 	if err != nil {
 		slog.Warn("audio exceeds the single-pass model limit; enable --long-audio to transcribe long files in overlapping chunks",
 			"seconds", float64(len(features))/float64(t.mel.FramesPerSecond()),
-			"limitSeconds", float64(modelMaxEncoderFrames*subsampling)/float64(t.mel.FramesPerSecond()))
+			"limitSeconds", float64(t.maxEncoderFrames*subsampling)/float64(t.mel.FramesPerSecond()))
 		return nil, duration, err
 	}
 

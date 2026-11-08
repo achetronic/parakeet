@@ -33,6 +33,12 @@ const (
 	// out of range and the self-attention Add crashes on a broadcast mismatch.
 	modelMaxEncoderFrames int64 = 5000
 
+	// localMaxEncoderFrames is the single-pass limit for the local-attention
+	// encoder (rel_pos_local_attn), which has no fixed positional table. It is
+	// bounded only by memory (the export is O(T²) attention), so this is a
+	// generous ceiling, not a real model limit.
+	localMaxEncoderFrames int64 = 1_000_000
+
 	// chunkSafetyMarginEncoderFrames keeps windows clear of the hard model
 	// limit so rounding at the subsampling boundary can never reach it.
 	chunkSafetyMarginEncoderFrames int64 = 200
@@ -169,19 +175,19 @@ func melToEncoderFrame(melOffset, subsampling int64) int64 {
 // returns a single full-coverage window, or ErrAudioTooLong when the input would
 // overrun the model's single-pass limit, so the caller fails cleanly instead of
 // letting the encoder crash on an out-of-range positional-encoding slice.
-func planForAudio(total, chunkFrames, overlapFrames, subsampling int64, longAudio bool) ([]chunkWindow, error) {
-	return planForAudioWithBoundaries(total, chunkFrames, overlapFrames, subsampling, longAudio, nil)
+func planForAudio(total, chunkFrames, overlapFrames, subsampling, maxEncoderFrames int64, longAudio bool) ([]chunkWindow, error) {
+	return planForAudioWithBoundaries(total, chunkFrames, overlapFrames, subsampling, maxEncoderFrames, longAudio, nil)
 }
 
 // planForAudioWithBoundaries is planForAudio with a boundary oracle: when long
 // audio is on it uses the oracle to place each interior overlap boundary
 // (falling back to the midpoint when the oracle declines or is nil). The
 // single-window and ErrAudioTooLong paths are unchanged.
-func planForAudioWithBoundaries(total, chunkFrames, overlapFrames, subsampling int64, longAudio bool, oracle boundaryOracle) ([]chunkWindow, error) {
+func planForAudioWithBoundaries(total, chunkFrames, overlapFrames, subsampling, maxEncoderFrames int64, longAudio bool, oracle boundaryOracle) ([]chunkWindow, error) {
 	if longAudio {
 		return planChunksWithBoundaries(total, chunkFrames, overlapFrames, oracle), nil
 	}
-	if melToEncoderFrame(total, subsampling) > modelMaxEncoderFrames {
+	if melToEncoderFrame(total, subsampling) > maxEncoderFrames {
 		return nil, ErrAudioTooLong
 	}
 	return []chunkWindow{{start: 0, end: total, emitStart: 0, emitEnd: total}}, nil
@@ -189,7 +195,7 @@ func planForAudioWithBoundaries(total, chunkFrames, overlapFrames, subsampling i
 
 // validateChunking rejects window sizes that would break planChunks or overrun
 // the model's positional-encoding limit. Sizes are in mel frames.
-func validateChunking(chunkFrames, overlapFrames, subsampling int64) error {
+func validateChunking(chunkFrames, overlapFrames, subsampling, maxEncoderFrames int64) error {
 	if chunkFrames <= 0 {
 		return fmt.Errorf("chunk size must be positive, got %d frames", chunkFrames)
 	}
@@ -199,7 +205,7 @@ func validateChunking(chunkFrames, overlapFrames, subsampling int64) error {
 	if overlapFrames >= chunkFrames {
 		return fmt.Errorf("chunk overlap (%d frames) must be smaller than chunk size (%d frames)", overlapFrames, chunkFrames)
 	}
-	maxFrames := (modelMaxEncoderFrames - chunkSafetyMarginEncoderFrames) * subsampling
+	maxFrames := (maxEncoderFrames - chunkSafetyMarginEncoderFrames) * subsampling
 	if chunkFrames > maxFrames {
 		return fmt.Errorf("chunk size (%d frames) exceeds the model-safe maximum (%d frames)", chunkFrames, maxFrames)
 	}
