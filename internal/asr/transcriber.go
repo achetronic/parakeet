@@ -368,11 +368,12 @@ func NewTranscriber(modelsDir string, workers int, opts Options) (*Transcriber, 
 	}
 	t.envInit = envInit
 
-	// Resolve encoder path. The encoder is always the local-attention one
-	// (rel_pos_local_attn), named encoder-model to match the decoder.
-	encoderPath := filepath.Join(modelsDir, "encoder-model.int8.onnx")
+	// Resolve encoder path. The server always uses the local-attention encoder
+	// (rel_pos_local_attn). The full-attention one is kept in the distribution
+	// image but not loaded here.
+	encoderPath := filepath.Join(modelsDir, "encoder-local.int8.onnx")
 	if _, err := os.Stat(encoderPath); os.IsNotExist(err) {
-		encoderPath = filepath.Join(modelsDir, "encoder-model.onnx")
+		encoderPath = filepath.Join(modelsDir, "encoder-local.onnx")
 		if _, err := os.Stat(encoderPath); os.IsNotExist(err) {
 			return nil, fmt.Errorf("encoder model not found; run 'make model-download-asr-int8' or 'make model-download-asr-fp32'")
 		}

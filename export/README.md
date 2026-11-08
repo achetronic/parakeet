@@ -27,8 +27,10 @@ Written to `export/asr/assets/`:
 | `config.json`                   | model config                                         |
 | `vocab.txt`                     | SentencePiece vocab + `<blk>` blank, 8193 lines      |
 | `nemo128.onnx`                  | mel preprocessor, test reference only                |
-| `encoder-model.onnx` + `.data`  | fp32 encoder, local attention (`rel_pos_local_attn`) |
-| `encoder-model.int8.onnx`       | int8 encoder, local attention                        |
+| `encoder-full.onnx` + `.data`  | fp32 encoder, full attention                         |
+| `encoder-full.int8.onnx`       | int8 encoder, full attention                         |
+| `encoder-local.onnx` + `.data` | fp32 encoder, local attention (`rel_pos_local_attn`) |
+| `encoder-local.int8.onnx`      | int8 encoder, local attention                        |
 | `decoder_joint-model.onnx`      | fp32 decoder + joint                                 |
 | `decoder_joint-model.int8.onnx` | int8 decoder + joint                                 |
 | `manifest.txt`                  | sha256 of every artifact                             |

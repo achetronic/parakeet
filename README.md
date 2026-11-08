@@ -401,21 +401,27 @@ from `-models` (default `./models`) and the precision from `-model-precision`
 
 ```
 models/
-├── asr/int8/     config.json, vocab.txt, nemo128.onnx, encoder-model.int8.onnx, decoder_joint-model.int8.onnx
-├── asr/fp32/     config.json, vocab.txt, nemo128.onnx, encoder-model.onnx + .data, decoder_joint-model.onnx
+├── asr/int8/     config.json, vocab.txt, nemo128.onnx, encoder-full.int8.onnx, encoder-local.int8.onnx, decoder_joint-model.int8.onnx
+├── asr/fp32/     config.json, vocab.txt, nemo128.onnx, encoder-full.onnx + .data, encoder-local.onnx + .data, decoder_joint-model.onnx
 ├── vad/          silero_vad.onnx
 └── diarization/int8/ + diarization/fp32/   Nemotron-3-Diarization
 ```
 
-| File (in `asr/<precision>/`)        | Size   | Description                 |
-| ----------------------------------- | ------ | --------------------------- |
-| `config.json`                       | 97 B   | Model configuration         |
-| `vocab.txt`                         | 94 KB  | SentencePiece vocabulary    |
-| `nemo128.onnx`                      | 140 KB | Preprocessor graph          |
-| `encoder-model.int8.onnx`           | 652 MB | int8 encoder                |
-| `decoder_joint-model.int8.onnx`     | 18 MB  | int8 TDT decoder            |
-| `encoder-model.onnx` + `.data`      | 2.5 GB | fp32 encoder                |
-| `decoder_joint-model.onnx`          | 72 MB  | fp32 TDT decoder            |
+The server uses the **local-attention** encoder (`encoder-local.*`). The
+full-attention encoder (`encoder-full.*`) ships in the distribution image but
+is not loaded at runtime.
+
+| File (in `asr/<precision>/`)        | Size   | Description                    |
+| ----------------------------------- | ------ | ------------------------------ |
+| `config.json`                       | 97 B   | Model configuration            |
+| `vocab.txt`                         | 94 KB  | SentencePiece vocabulary       |
+| `nemo128.onnx`                      | 140 KB | Preprocessor graph             |
+| `encoder-local.int8.onnx`           | 614 MB | int8 encoder (local attention) |
+| `encoder-full.int8.onnx`            | 652 MB | int8 encoder (full attention)  |
+| `decoder_joint-model.int8.onnx`     | 18 MB  | int8 TDT decoder               |
+| `encoder-local.onnx` + `.data`      | 2.4 GB | fp32 encoder (local attention) |
+| `encoder-full.onnx` + `.data`       | 2.4 GB | fp32 encoder (full attention)  |
+| `decoder_joint-model.onnx`          | 72 MB  | fp32 TDT decoder               |
 
 `vad/silero_vad.onnx` ([snakers4/silero-vad](https://github.com/snakers4/silero-vad), MIT, pinned to v6.2.1) is precision-independent. Used only for chunk boundaries in long-audio mode; missing is a graceful degrade to mel energy.
 
