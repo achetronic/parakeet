@@ -399,7 +399,8 @@ No other external Go dependencies. Standard library used for HTTP, JSON, audio p
 `vad/`, `diarization/{int8,fp32}`. The server reads the family and precision
 from `-models` (default `./models`) and `-model-precision` (default `int8`).
 
-- `asr/int8/encoder-model.int8.onnx` (~652MB) or `asr/fp32/encoder-model.onnx` (~2.5GB)
+- `asr/int8/encoder-local.int8.onnx` (~614MB) or `asr/fp32/encoder-local.onnx` (~2.4GB) - the encoder the server loads (local attention).
+- `asr/int8/encoder-full.int8.onnx` (~652MB) or `asr/fp32/encoder-full.onnx` (~2.4GB) - full-attention encoder, ships in the distribution image but is not loaded at runtime.
 - `asr/int8/decoder_joint-model.int8.onnx` (~18MB) or `asr/fp32/decoder_joint-model.onnx` (~72MB)
 - `config.json`, `vocab.txt`, `nemo128.onnx` inside the ASR precision dir
 - `vad/silero_vad.onnx` (~2.3MB, snakers4/silero-vad v6.2.1, MIT). Used only for VAD-aware chunk boundaries in long-audio mode. Missing file is a graceful degrade (warns once, falls back to mel energy), not a fatal error.

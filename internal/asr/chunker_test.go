@@ -119,7 +119,7 @@ func TestValidateChunking(t *testing.T) {
 		{"negative overlap rejected", 30000, -1, true},
 		{"overlap equals chunk rejected", 30000, 30000, true},
 		{"overlap exceeds chunk rejected", 1000, 2000, true},
-		{"exceeds model limit rejected", 40000, 1500, true},
+		{"exceeds model limit rejected", 8000000, 1500, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -137,10 +137,10 @@ func TestPlanForAudio(t *testing.T) {
 		subsampling = 8
 		chunk       = 30000
 		overlap     = 1500
-		// modelMaxEncoderFrames is 5000, so 5000*8 = 40000 mel frames is the
-		// single-pass ceiling.
+		// modelMaxEncoderFrames is 1_000_000, so 1_000_000*8 = 8_000_000 mel
+		// frames is the single-pass ceiling.
 		underLimit = 40000
-		overLimit  = 40008
+		overLimit  = 8000008
 	)
 	t.Run("long audio off, short audio, single window", func(t *testing.T) {
 		plan, err := planForAudio(underLimit, chunk, overlap, subsampling, false)

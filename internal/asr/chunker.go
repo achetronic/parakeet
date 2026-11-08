@@ -27,11 +27,11 @@ const (
 	DefaultChunkSeconds        = 60
 	DefaultChunkOverlapSeconds = 15
 
-	// modelMaxEncoderFrames is the longest encoder-frame sequence the exported
-	// ONNX model accepts: its positional-encoding table is [1, 9999, 1024],
-	// centred at 5000, so beyond 5000 frames the relative-position slice goes
-	// out of range and the self-attention Add crashes on a broadcast mismatch.
-	modelMaxEncoderFrames int64 = 5000
+	// modelMaxEncoderFrames is the single-pass ceiling. The local-attention
+	// encoder (rel_pos_local_attn) has no fixed positional table, so this is a
+	// generous ceiling bounded only by memory (the export is O(T²) attention),
+	// not a real model limit.
+	modelMaxEncoderFrames int64 = 1_000_000
 
 	// chunkSafetyMarginEncoderFrames keeps windows clear of the hard model
 	// limit so rounding at the subsampling boundary can never reach it.

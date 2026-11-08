@@ -20,14 +20,14 @@ cp "$assets/config.json" "$assets/vocab.txt" "$stage/"
 
 case "$mode" in
   int8)
-    cp "$assets/encoder-model.int8.onnx" \
+    cp "$assets/encoder-full.int8.onnx" \
        "$assets/encoder-local.int8.onnx" \
        "$assets/decoder_joint-model.int8.onnx" \
        "$stage/"
     ;;
   fp32)
-    cp "$assets/encoder-model.onnx" \
-       "$assets/encoder-model.onnx.data" \
+    cp "$assets/encoder-full.onnx" \
+       "$assets/encoder-full.onnx.data" \
        "$assets/encoder-local.onnx" \
        "$assets/encoder-local.onnx.data" \
        "$assets/decoder_joint-model.onnx" \
@@ -43,4 +43,6 @@ docker build -f "$root/export/asr/Dockerfile.models" -t "$image:$tag" "$stage"
 
 if [ "$push" = "--push" ]; then
   docker push "$image:$tag"
+  docker tag "$image:$tag" "$image:latest"
+  docker push "$image:latest"
 fi

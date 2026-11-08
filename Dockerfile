@@ -1,3 +1,8 @@
+# Global build args. MODEL_PRECISION selects int8/fp32; MODEL_VERSION pins the
+# OCI model image version (see export-models workflow).
+ARG MODEL_PRECISION=int8
+ARG MODEL_VERSION=latest
+
 # Build stage - using debian for CGO support (required by onnxruntime_go)
 FROM golang:1.25-bookworm AS builder
 
@@ -29,9 +34,12 @@ COPY . .
 # Build binary with CGO
 RUN go build -ldflags="-s -w" -o parakeet .
 
-# Models stage: downloads the models via the Makefile recipes so the runtime
-# stage only receives the model files (no make, curl or Makefile in the final
-# image).
+# ASR models come from our OCI image (distribution: both full and local).
+FROM ghcr.io/achetronic/parakeet-models-asr-${MODEL_PRECISION}:${MODEL_VERSION} AS asr-models
+
+# Models stage: assembles the family-first layout. ASR is copied from the image
+# above (only the local encoder is kept); VAD and diarization are downloaded via
+# the Makefile recipes.
 FROM debian:bookworm-slim AS models
 ARG MODEL_PRECISION=int8
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -39,7 +47,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY Makefile /app/Makefile
-RUN make MODELS_DIR=/models model-download-asr-${MODEL_PRECISION} model-download-vad model-download-diarization-${MODEL_PRECISION}
+RUN make MODELS_DIR=/models model-download-vad model-download-diarization-${MODEL_PRECISION}
+COPY --from=asr-models /models /models/asr/${MODEL_PRECISION}
+RUN rm -f /models/asr/${MODEL_PRECISION}/encoder-full.*
 
 # Runtime stage
 FROM debian:bookworm-slim

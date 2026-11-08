@@ -17,6 +17,8 @@ ARG ONNXRUNTIME_VERSION=1.25.1
 ARG GO_VERSION=1.25.5
 ARG CUDA_RUNTIME_IMAGE=nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04
 ARG CUDA_DEVEL_IMAGE=nvidia/cuda:12.6.3-cudnn-devel-ubuntu22.04
+ARG MODEL_PRECISION=fp32
+ARG MODEL_VERSION=latest
 
 # Build stage - on the CUDA devel base so the build glibc matches the runtime
 FROM ${CUDA_DEVEL_IMAGE} AS builder
@@ -57,9 +59,13 @@ COPY . .
 # Build binary with CGO
 RUN go build -ldflags="-s -w" -o parakeet .
 
-# Models stage: downloads the models via the Makefile recipes so the runtime
-# stage only receives the model files (no make, curl or Makefile in the final
-# image). A plain Debian base suffices (no CUDA needed just to download).
+# ASR models come from our OCI image (distribution: both full and local).
+FROM ghcr.io/achetronic/parakeet-models-asr-${MODEL_PRECISION}:${MODEL_VERSION} AS asr-models
+
+# Models stage: assembles the family-first layout. ASR is copied from the image
+# above (only the local encoder is kept); VAD and diarization are downloaded via
+# the Makefile recipes. A plain Debian base suffices (no CUDA needed just to
+# download).
 FROM debian:bookworm-slim AS models
 ARG MODEL_PRECISION=fp32
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -67,7 +73,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY Makefile /app/Makefile
-RUN make MODELS_DIR=/models model-download-asr-${MODEL_PRECISION} model-download-vad model-download-diarization-${MODEL_PRECISION}
+RUN make MODELS_DIR=/models model-download-vad model-download-diarization-${MODEL_PRECISION}
+COPY --from=asr-models /models /models/asr/${MODEL_PRECISION}
+RUN rm -f /models/asr/${MODEL_PRECISION}/encoder-full.*
 
 # Runtime stage
 FROM ${CUDA_RUNTIME_IMAGE}

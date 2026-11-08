@@ -6,8 +6,8 @@ Writes to --out (default: assets/ next to this script):
     config.json                  model config (generated)
     vocab.txt                    SentencePiece vocab + <blk> blank (8193 lines)
     nemo128.onnx                 mel preprocessor (test reference only)
-    encoder-model.onnx(.data)    fp32 encoder, full attention
-    encoder-model.int8.onnx      int8 encoder, full attention
+    encoder-full.onnx(.data)     fp32 encoder, full attention
+    encoder-full.int8.onnx       int8 encoder, full attention
     encoder-local.onnx(.data)    fp32 encoder, local attention (rel_pos_local_attn)
     encoder-local.int8.onnx      int8 encoder, local attention
     decoder_joint-model.onnx     fp32 decoder + joint
@@ -219,12 +219,11 @@ def export_encoder(model, out, local_attention, att_context=(256, 256)):
         enc = glob.glob(os.path.join(tmp, "encoder-*.onnx"))[0]
         dec = glob.glob(os.path.join(tmp, "decoder_joint-*.onnx"))[0]
 
-        prefix = "encoder-local" if local_attention else "encoder-model"
+        prefix = "encoder-local" if local_attention else "encoder-full"
         fp32_dst = os.path.join(out, prefix + ".onnx")
         consolidate_external_data(enc, fp32_dst)
         quantize(fp32_dst, os.path.join(out, prefix + ".int8.onnx"))
 
-        # Decoder is identical across attention modes; keep one copy.
         dec_dst = os.path.join(out, "decoder_joint-model.onnx")
         shutil.copy(dec, dec_dst)
         quantize(dec, os.path.join(out, "decoder_joint-model.int8.onnx"))
