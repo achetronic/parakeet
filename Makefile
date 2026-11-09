@@ -117,7 +117,7 @@ deps-onnxruntime: ## Install ONNX Runtime library
 	else echo "Unsupported architecture: $$ARCH"; exit 1; fi; \
 	curl -L -o /tmp/onnxruntime.tgz "https://github.com/microsoft/onnxruntime/releases/download/v$(ONNXRUNTIME_VERSION)/onnxruntime-linux-$$ARCH_NAME-$(ONNXRUNTIME_VERSION).tgz" && \
 	tar -xzf /tmp/onnxruntime.tgz -C /tmp && \
-	sudo cp /tmp/onnxruntime-linux-$$ARCH_NAME-$(ONNXRUNTIME_VERSION)/lib/*.so* /usr/local/lib/ && \
+	sudo cp -a /tmp/onnxruntime-linux-$$ARCH_NAME-$(ONNXRUNTIME_VERSION)/lib/*.so* /usr/local/lib/ && \
 	sudo ldconfig && \
 	rm -rf /tmp/onnxruntime.tgz /tmp/onnxruntime-linux-$$ARCH_NAME-$(ONNXRUNTIME_VERSION) && \
 	echo "ONNX Runtime installed to /usr/local/lib/"
