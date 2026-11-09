@@ -269,3 +269,17 @@ The result is clamped into the legal overlap range, preserving the tiling invari
 - `-workers` bounds the whole inference pipeline, not just the decoder.
 - On GPU each worker owns its own encoder+decoder pair, so no ONNX session is shared across requests.
 - `-gpu-devices "0,1,2"` (env `PARAKEET_GPU_DEVICES`) replaces `-gpu-device`.
+
+## DD-020: Docker-Free Model Download With crane
+
+**Context**: `model-download-asr-*` pulled model images with `docker pull` + `docker cp`, so users without Docker could not fetch models (issue #44).
+
+**Decision**: Pull and unpack the GHCR model images with `crane export` (single static binary from google/go-containerregistry), downloaded on first use into `./bin` by the `crane` Make target.
+
+**Rationale**: `crane export IMAGE - | tar -x` streams the flattened filesystem, so no Docker daemon and no full-image tarball on disk. One binary, official GitHub release, Linux and macOS on amd64/arm64.
+
+**Consequences**:
+
+- `make model-download-asr-int8` / `-fp32` now only need `curl`, `tar` and `bash`; Docker stays optional (still used to build/push images).
+- Models land directly in `models/asr/{int8,fp32}` via `tar --strip-components=1 models`.
+- crane is pinned to `CRANE_VERSION` and cached in `./bin`; `make clean` removes it.
