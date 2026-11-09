@@ -23,11 +23,6 @@ DOCKER_TAG ?= $(VERSION)
 # Directories
 MODELS_DIR := ./models
 
-# crane pulls and unpacks OCI images without Docker. It is a single static
-# binary from google/go-containerregistry, fetched on first use into $(BIN_DIR).
-CRANE_VERSION ?= v0.20.2
-CRANE := $(BIN_DIR)/crane
-
 .PHONY: all build clean test fmt vet lint run help
 .PHONY: docker-build-int8 docker-build-fp32 docker-build-cuda docker-run-int8 docker-run-fp32 docker-run-cuda docker-push
 .PHONY: crane
@@ -176,27 +171,6 @@ MODELS_ASR_INT8_DIR := $(MODELS_DIR)/asr/int8
 MODELS_ASR_FP32_DIR := $(MODELS_DIR)/asr/fp32
 MODELS_VAD_DIR := $(MODELS_DIR)/vad
 
-# Docker-free pull of the ASR model images (issue #44). Supported platforms:
-# Linux and macOS on amd64/arm64. Windows users can keep using Docker.
-crane: $(CRANE) ## Download crane (OCI image exporter) if needed
-$(CRANE): $(BIN_DIR)
-	@OS=$$(uname -s); \
-	ARCH=$$(uname -m); \
-	case "$$OS-$$ARCH" in \
-		Linux-x86_64) ASSET="Linux_x86_64" ;; \
-		Linux-aarch64) ASSET="Linux_arm64" ;; \
-		Darwin-x86_64) ASSET="Darwin_x86_64" ;; \
-		Darwin-arm64) ASSET="Darwin_arm64" ;; \
-		*) echo "Unsupported platform for crane: $$OS-$$ARCH" >&2; exit 1 ;; \
-	esac; \
-	echo "Downloading crane $(CRANE_VERSION) ($$ASSET) ..."; \
-	tmp="$(BIN_DIR)/go-containerregistry-$(CRANE_VERSION).tar.gz"; \
-	curl -fL "https://github.com/google/go-containerregistry/releases/download/$(CRANE_VERSION)/go-containerregistry_$$ASSET.tar.gz" -o "$$tmp" || { echo "Failed to download crane" >&2; exit 1; }; \
-	tar -xzf "$$tmp" -C "$(BIN_DIR)" crane; \
-	rm -f "$$tmp"; \
-	chmod +x "$(CRANE)"; \
-	echo "crane installed to $(CRANE)"
-
 model-download: model-download-asr model-download-vad model-download-diarization ## Download every model (ASR, VAD, diarization, both precisions)
 
 model-download-asr: model-download-asr-int8 model-download-asr-fp32 ## Download ASR models (int8 + fp32)
@@ -305,6 +279,38 @@ release-windows: $(BIN_DIR) ## Build Windows binary
 	GOOS=windows GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME)-windows-amd64.exe .
 
 ################################################################################
+## Auxiliary tools
+################################################################################
+# Small helper binaries the Makefile downloads on first use into $(BIN_DIR).
+# Keep every external tool here so the rest of the targets only depend on the
+# tool name, not on how it gets installed. Only crane for now.
+
+# crane pulls and unpacks OCI images without Docker. It is a single static
+# binary from google/go-containerregistry (issue #44). Supported platforms:
+# Linux and macOS on amd64/arm64. Windows users can keep using Docker.
+CRANE_VERSION ?= v0.20.2
+CRANE := $(BIN_DIR)/crane
+
+crane: $(CRANE) ## Download crane (OCI image exporter) if needed
+$(CRANE): $(BIN_DIR)
+	@OS=$$(uname -s); \
+	ARCH=$$(uname -m); \
+	case "$$OS-$$ARCH" in \
+		Linux-x86_64) ASSET="Linux_x86_64" ;; \
+		Linux-aarch64) ASSET="Linux_arm64" ;; \
+		Darwin-x86_64) ASSET="Darwin_x86_64" ;; \
+		Darwin-arm64) ASSET="Darwin_arm64" ;; \
+		*) echo "Unsupported platform for crane: $$OS-$$ARCH" >&2; exit 1 ;; \
+	esac; \
+	echo "Downloading crane $(CRANE_VERSION) ($$ASSET) ..."; \
+	tmp="$(BIN_DIR)/go-containerregistry-$(CRANE_VERSION).tar.gz"; \
+	curl -fL "https://github.com/google/go-containerregistry/releases/download/$(CRANE_VERSION)/go-containerregistry_$$ASSET.tar.gz" -o "$$tmp" || { echo "Failed to download crane" >&2; exit 1; }; \
+	tar -xzf "$$tmp" -C "$(BIN_DIR)" crane; \
+	rm -f "$$tmp"; \
+	chmod +x "$(CRANE)"; \
+	echo "crane installed to $(CRANE)"
+
+################################################################################
 ## Help target
 ################################################################################
 
@@ -339,7 +345,6 @@ help: ## Show this help message
 	@echo "  \033[36mmodel-export-asr\033[0m  Regenerate ASR ONNX assets from the NVIDIA checkpoint"
 	@echo "  \033[36mmodel-build-oci-images\033[0m  Build int8 + fp32 model images locally"
 	@echo "  \033[36mmodel-push-oci-images\033[0m  Build and push int8 + fp32 model images to GHCR"
-	@echo "  \033[36mcrane\033[0m  Download crane (OCI image exporter) if needed"
 	@echo "  \033[36mmodel-download\033[0m  Download every model (ASR + VAD + diarization, both precisions)"
 	@echo "  \033[36mmodel-download-asr\033[0m  Download ASR models (int8 + fp32)"
 	@echo "  \033[36mmodel-download-asr-int8\033[0m  Download ASR int8 models from GHCR (~670MB)"
@@ -363,6 +368,9 @@ help: ## Show this help message
 	@echo "  \033[36mrelease-linux\033[0m       Build Linux binaries (amd64/arm64)"
 	@echo "  \033[36mrelease-darwin\033[0m      Build macOS binaries (amd64/arm64)"
 	@echo "  \033[36mrelease-windows\033[0m     Build Windows binary (amd64)"
+	@echo ""
+	@echo "\033[1mAuxiliary tools:\033[0m"
+	@echo "  \033[36mcrane\033[0m                Download crane (OCI image exporter) if needed"
 	@echo ""
 	@echo "\033[1mOther:\033[0m"
 	@echo "  \033[36mhelp\033[0m                Show this help message"
