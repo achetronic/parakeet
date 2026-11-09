@@ -18,6 +18,7 @@
   - [From Release Binary](#from-release-binary)
   - [From Source](#from-source)
   - [Using Docker](#using-docker)
+  - [GPU Inference (CUDA)](#gpu-inference-cuda)
 - [Configuration](#configuration)
   - [Command Line Flags](#command-line-flags)
   - [Environment Variables](#environment-variables)
@@ -25,12 +26,17 @@
   - [Speaker Diarization](#speaker-diarization)
   - [Model Files](#model-files)
 - [API Reference](#api-reference)
+  - [Authentication](#authentication)
   - [Transcribe Audio](#transcribe-audio)
   - [Segments and timing](#segments-and-timing)
+  - [Speaker Diarization](#speaker-diarization-1)
   - [Streaming](#streaming)
+  - [List Models](#list-models)
+  - [Health Check](#health-check)
 - [Development](#development)
 - [Troubleshooting](#troubleshooting)
 - [License](#license)
+- [Credits](#credits)
 
 ## Overview
 
@@ -41,7 +47,7 @@ Key features:
 - OpenAI Whisper-compatible REST API
 - API key authentication (optional, via environment variable)
 - Streaming transcriptions via Server-Sent Events (OpenAI-compatible `transcript.text.delta` / `transcript.text.done`)
-- ONNX Runtime inference (CPU)
+- ONNX Runtime inference (CPU and optional CUDA GPU)
 - No Python dependency at runtime (ffmpeg is an optional system dependency for non-WAV audio)
 - Structured logging with `slog` (text and JSON formats, configurable log level)
 - Support for multiple response formats (JSON, text, SRT, VTT)
@@ -53,7 +59,7 @@ Key features:
 
 ## Model Architecture
 
-This server uses the [NVIDIA Parakeet TDT 0.6B](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) model, converted to ONNX format by [istupakov](https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx).
+This server uses the [NVIDIA Parakeet TDT 0.6B](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) model, exported to ONNX from the official NVIDIA checkpoint.
 
 The architecture consists of:
 
@@ -179,14 +185,19 @@ export ONNXRUNTIME_LIB=/path/to/libonnxruntime.so
 
 ### From Release Binary
 
-Download the latest release for your platform from the [Releases](https://github.com/achetronic/parakeet/releases) page.
+Clone the repository and download the release binary for your platform. The
+clone provides the `Makefile` that downloads the models.
 
 ```bash
-# Linux (amd64)
+# Clone the repository (provides the Makefile used to download the models)
+git clone https://github.com/achetronic/parakeet.git
+cd parakeet
+
+# Download the release binary for your platform
 curl -L -o parakeet https://github.com/achetronic/parakeet/releases/latest/download/parakeet-linux-amd64
 chmod +x parakeet
 
-# Download models (using Makefile)
+# Download models
 make model-download            # ASR + VAD + diarization, int8 + fp32
 # Or just the ASR int8 models:
 make model-download-asr-int8   # int8 quantized models (recommended, ~670MB)
@@ -238,7 +249,6 @@ docker run -d \
 #### Docker Compose
 
 ```yaml
-version: "3.8"
 services:
   parakeet:
     image: ghcr.io/achetronic/parakeet:latest
@@ -248,11 +258,6 @@ services:
       - PARAKEET_API_KEY=your-secret-key # optional
       - PARAKEET_WORKERS=2
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5092/health"]
-      interval: 30s
-      timeout: 3s
-      retries: 3
 ```
 
 ### GPU Inference (CUDA)
@@ -309,7 +314,7 @@ start instead of silently falling back to CPU.
 | `-model-precision`            | Model precision: `int8` or `fp32`                                       | `int8`                     | `-model-precision fp32`               |
 | `-log-level`                  | Log level: debug, info, warn, error                                      | `info`                     | `-log-level debug`                     |
 | `-log-format`                 | Log output format: text or json                                          | `text`                     | `-log-format json`                     |
-| `-workers`                    | Concurrent transcriptions (each ~670MB RAM/VRAM for int8)                | `4`                        | `-workers 2`                           |
+| `-workers`                    | Concurrent transcriptions (each ~2GB RAM for int8, ~6GB for fp32)        | `4`                        | `-workers 2`                           |
 | `-ffmpeg`                     | Enable ffmpeg fallback for non-WAV audio                                 | `true`                     | `-ffmpeg=false`                        |
 | `-ffmpeg-path`                | Path to the ffmpeg binary (empty = resolve from `PATH`)                  | ``                         | `-ffmpeg-path /usr/bin/ffmpeg`         |
 | `-ffmpeg-timeout`             | Maximum wall-clock time for a single ffmpeg conversion                   | `60s`                      | `-ffmpeg-timeout 30s`                  |
@@ -320,7 +325,7 @@ start instead of silently falling back to CPU.
 | `-chunk-overlap-seconds`      | Overlap between consecutive chunks, in seconds                           | `15`                       | `-chunk-overlap-seconds 20`            |
 | `-disable-vad-based-chunking` | Disable the Silero VAD chunk-boundary layer (falls back to mel energy)   | `false`                    | `-disable-vad-based-chunking`          |
 | `-disable-mel-based-chunking` | Disable the mel-energy chunk-boundary layer (falls back to the midpoint) | `false`                    | `-disable-mel-based-chunking`          |
-| `-vad-model-path`             | Path to the Silero VAD ONNX model                                        | `<models>/silero_vad.onnx` | `-vad-model-path /opt/silero_vad.onnx` |
+| `-vad-model-path`             | Path to the Silero VAD ONNX model                                        | `<models>/vad/silero_vad.onnx` | `-vad-model-path /opt/silero_vad.onnx` |
 | `-enable-diarization`         | Load the diarization model and allow `diarize=true`                      | `false`                    | `-enable-diarization`                  |
 
 **Examples:**
@@ -401,8 +406,8 @@ from `-models` (default `./models`) and the precision from `-model-precision`
 
 ```
 models/
-├── asr/int8/     config.json, vocab.txt, nemo128.onnx, encoder-full.int8.onnx, encoder-local.int8.onnx, decoder_joint-model.int8.onnx
-├── asr/fp32/     config.json, vocab.txt, nemo128.onnx, encoder-full.onnx + .data, encoder-local.onnx + .data, decoder_joint-model.onnx
+├── asr/int8/     config.json, vocab.txt, encoder-full.int8.onnx, encoder-local.int8.onnx, decoder_joint-model.int8.onnx
+├── asr/fp32/     config.json, vocab.txt, encoder-full.onnx + .data, encoder-local.onnx + .data, decoder_joint-model.onnx
 ├── vad/          silero_vad.onnx
 └── diarization/int8/ + diarization/fp32/   Nemotron-3-Diarization
 ```
@@ -415,10 +420,9 @@ is not loaded at runtime.
 | ----------------------------------- | ------ | ------------------------------ |
 | `config.json`                       | 97 B   | Model configuration            |
 | `vocab.txt`                         | 94 KB  | SentencePiece vocabulary       |
-| `nemo128.onnx`                      | 140 KB | Preprocessor graph             |
 | `encoder-local.int8.onnx`           | 614 MB | int8 encoder (local attention) |
 | `encoder-full.int8.onnx`            | 652 MB | int8 encoder (full attention)  |
-| `decoder_joint-model.int8.onnx`     | 18 MB  | int8 TDT decoder               |
+| `decoder_joint-model.int8.onnx`     | 54 MB  | int8 TDT decoder               |
 | `encoder-local.onnx` + `.data`      | 2.4 GB | fp32 encoder (local attention) |
 | `encoder-full.onnx` + `.data`       | 2.4 GB | fp32 encoder (full attention)  |
 | `decoder_joint-model.onnx`          | 72 MB  | fp32 TDT decoder               |
@@ -650,40 +654,7 @@ Returns `{"status": "ok"}` if the server is running.
 
 ### Available Make Targets
 
-```bash
-make help          # Show all available targets
-
-# Build
-make build         # Build the binary
-
-# Development
-make run           # Build and run
-make run-dev       # Run with custom port (5092) for development
-make clean         # Remove build artifacts
-
-# Code quality
-make fmt           # Format code
-make vet           # Run go vet
-make lint          # Run all linters (vet + fmt)
-make test          # Run tests
-make test-coverage # Run tests with coverage report
-
-# Models
-make model-download        # Download every model (ASR + VAD + diarization, both precisions)
-make model-download-asr-int8   # Download int8 quantized ASR models
-make model-download-asr-fp32   # Download full precision ASR models
-
-# Docker
-make docker-build-int8  # Build Docker image with int8 models
-make docker-build-fp32  # Build Docker image with fp32 models
-make docker-build-cuda  # Build CUDA/GPU image with fp32 models
-make docker-run-int8    # Run Docker container with int8 models
-make docker-run-fp32    # Run Docker container with fp32 models
-make docker-run-cuda    # Run CUDA/GPU container (needs --gpus all)
-
-# Release
-make release       # Build binaries for all platforms
-```
+Run `make help` for the full, up-to-date list of targets.
 
 ### Running Tests
 
@@ -749,4 +720,3 @@ Audio is detected by content (magic bytes), not by filename extension, so client
 ## Credits
 
 - **NVIDIA** - Original [Parakeet TDT 0.6B](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) model
-- **Ivan Stupakov** ([@istupakov](https://github.com/istupakov)) - [ONNX conversion](https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx) of the Parakeet model

@@ -34,6 +34,13 @@ make model-download-vad      # Download + verify the Silero VAD model (MIT, pinn
 make model-download-diarization-int8  # Download int8 diarization model (~120MB)
 make model-download-diarization-fp32  # Download fp32 diarization model (~400MB)
 
+# Model distribution (download tool + export + package as OCI)
+make crane                       # Download crane (OCI image exporter) if needed
+make model-export-asr-venv       # Create the export venv with ASR deps
+make model-export-asr            # Regenerate ASR ONNX assets from the checkpoint
+make model-build-oci-images      # Build int8 + fp32 model images locally
+make model-push-oci-images       # Build and push int8 + fp32 model images to GHCR
+
 # Test
 make test                   # Run tests
 make test-coverage          # Run with coverage
@@ -94,20 +101,25 @@ parakeet/
 │       ├── merge.go        # Diarization + ASR word merge into speaker turns
 │       ├── types.go        # Request/response type definitions
 │       └── response_test.go # Segment mapping, SRT/VTT cue rendering, timestamps
-├── models/                 # ONNX models (downloaded separately, incl. silero_vad.onnx)
+├── export/                 # ASR export pipeline (ONNX assets + OCI model images)
+├── docs/                   # Images (logo, social previews)
+├── models/                 # ONNX models (downloaded via make model-download)
 ├── testdata/
-│   └── reference/          # Issue #18 reproduction audio + reference transcripts
-├── bin/                    # Build output directory
+│   ├── reference/          # Long-audio reference audio + transcripts
+│   └── diarization/        # 2-speaker diarization sample
+├── bin/                    # Build output (parakeet binary + crane)
 ├── Makefile                # Build recipes
 ├── Dockerfile              # Multi-stage container build (CPU)
 ├── Dockerfile.cuda         # CUDA/GPU image (ONNX Runtime GPU build, fp32, linux/amd64)
 ├── .agents/                # AI agent documentation
 │   ├── AGENTS.md           # This file - codebase guide for agents
+│   ├── CONCURRENCY.md      # Concurrent transcription design (CPU/GPU)
 │   ├── TODO.md             # Pending tasks and improvements
 │   └── DESIGN_DECISIONS.md # Architectural decisions record
 ├── .github/
 │   └── workflows/
 │       ├── ci.yaml         # CI pipeline (lint, test, build)
+│       ├── export-models.yaml # Regenerate + publish model OCI images
 │       └── release.yaml    # Release pipeline (binaries, docker)
 └── README.md
 ```
@@ -312,26 +324,28 @@ No other external Go dependencies. Standard library used for HTTP, JSON, audio p
 ### CI Pipeline (`.github/workflows/ci.yaml`)
 
 - Runs on push/PR to main/master
-- Jobs: lint (Go 1.22), test (Go 1.25), build (Go 1.25)
+- Jobs: lint, test, build (all on Go 1.25)
 - Lint checks: go vet, gofmt
 
 ### Release Pipeline (`.github/workflows/release.yaml`)
 
-- Triggers on version tags (v\*)
-- Builds binaries for linux/darwin/windows (amd64/arm64)
-- Creates GitHub release with checksums
-- Pushes Docker images to ghcr.io (int8 and fp32 variants)
+- Triggers on version tags (`v*`) or manual dispatch
+- Builds linux binaries (amd64/arm64) and publishes the GitHub release with checksums
+- Pushes Docker images to ghcr.io (int8 and fp32 variants), plus `latest` from int8
 - `docker-cuda` job builds `Dockerfile.cuda` and pushes `*-cuda` / `latest-cuda` tags (linux/amd64 only)
+
+### Model Pipeline (`.github/workflows/export-models.yaml`)
+
+- Manual dispatch: regenerates the ASR ONNX assets and pushes the model OCI images (`parakeet-models-asr-{int8,fp32}`) to ghcr.io with the given tag (defaults to `latest`).
 
 ### Docker Build
 
 - Multi-stage build with golang:1.25-bookworm builder
-- Runtime: debian:bookworm-slim with ONNX Runtime 1.25.1
-- Models embedded in image during build
-- Health check included
+- Runtime: debian:bookworm-slim with ONNX Runtime 1.25.1 and ffmpeg
+- Models embedded in image during build: ASR from the OCI model image (`COPY --from=asr-models`), VAD and diarization via the Makefile recipes (`make MODELS_DIR=/models model-download-vad model-download-diarization-<precision>`)
 - Exposed port: 5092
 - `Dockerfile.cuda`: NVIDIA CUDA base + GPU build of ONNX Runtime, fp32 models, linux/amd64 only. Run with `--gpus all` (nvidia-container-toolkit required).
-- The image bundles Parakeet + Silero VAD + Nemotron-3-Diarization via the Makefile recipes (`make MODELS_DIR=/models model-download-asr-<precision> model-download-vad model-download-diarization-<precision>`). Diarization is gated at runtime by `PARAKEET_ENABLE_DIARIZATION=true` (or `-enable-diarization`).
+- Diarization is gated at runtime by `PARAKEET_ENABLE_DIARIZATION=true` (or `-enable-diarization`).
 
 ## Common Tasks for Agents
 
@@ -401,11 +415,11 @@ from `-models` (default `./models`) and `-model-precision` (default `int8`).
 
 - `asr/int8/encoder-local.int8.onnx` (~614MB) or `asr/fp32/encoder-local.onnx` (~2.4GB) - the encoder the server loads (local attention).
 - `asr/int8/encoder-full.int8.onnx` (~652MB) or `asr/fp32/encoder-full.onnx` (~2.4GB) - full-attention encoder, ships in the distribution image but is not loaded at runtime.
-- `asr/int8/decoder_joint-model.int8.onnx` (~18MB) or `asr/fp32/decoder_joint-model.onnx` (~72MB)
-- `config.json`, `vocab.txt`, `nemo128.onnx` inside the ASR precision dir
+- `asr/int8/decoder_joint-model.int8.onnx` (~54MB) or `asr/fp32/decoder_joint-model.onnx` (~72MB)
+- `config.json`, `vocab.txt` inside the ASR precision dir
 - `vad/silero_vad.onnx` (~2.3MB, snakers4/silero-vad v6.2.1, MIT). Used only for VAD-aware chunk boundaries in long-audio mode. Missing file is a graceful degrade (warns once, falls back to mel energy), not a fatal error.
 - `diarization/int8/` or `diarization/fp32/` - Nemotron-3-Diarization: `model_quantized.onnx` + `model_quantized.onnx_data` (int8, ~120MB) or `model.onnx` + `model.onnx_data` (fp32, ~400MB), plus `config.json`, `preprocessor_config.json`, `processor_config.json`. Download via `make model-download-diarization-int8` / `-fp32` (chained into `make model-download`).
-- Download via `make model-download` or manually from HuggingFace (Silero from its GitHub release)
+- Download via `make model-download` (ASR via crane from GHCR, VAD from GitHub, diarization from HuggingFace)
 
 ### Chunk Boundary Selection (long-audio mode)
 
