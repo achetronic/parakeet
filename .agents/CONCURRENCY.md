@@ -1,8 +1,8 @@
 # Concurrent Transcriptions
 
 How Parakeet handles several transcriptions at once, on CPU and GPU, including
-pods with multiple GPUs or MIG slices. This is the approach, not the build
-plan; the concrete changes live in DESIGN_DECISIONS.md (DD-019) and TODO.md.
+pods with multiple GPUs or MIG slices. Implemented; see DESIGN_DECISIONS.md
+(DD-019).
 
 ## How one transcription works
 
@@ -29,23 +29,22 @@ The model weights are loaded once:
 Everything else (waveform, mel features, tensors, LSTM state) is created and
 thrown away per request.
 
-## What is broken today
+## Why the old design was broken
 
-There is no gate at the front. Every request that arrives runs stages 1 to 4
-at the same time, with no limit, because the only semaphore sits at the very
-end, at the decoder.
+Before DD-019 there was no gate at the front. Every request ran stages 1 to 4
+with no limit, because the only semaphore sat at the very end, at the decoder.
 
-- The pure Go math (mel, VAD) parallelizes fine and is safe, but unbounded.
-- The encoder is one shared copy that every request hits at once. On CPU that
-  is fine. On GPU it is not: the card cannot run two convolutions with
-  different audio lengths on the same session at once, so it corrupts state or
-  crashes (the known MIOpen/cuDNN failure).
-- Only the decoder is bounded today: N workers, N parallel decodes max.
+- The pure Go math (mel, VAD) parallelized fine but was unbounded.
+- The encoder was one shared copy every request hit at once. On CPU that was
+  fine; on GPU it was not: the card cannot run two convolutions with different
+  audio lengths on the same session at once, so it corrupted state or crashed
+  (the known MIOpen/cuDNN failure).
+- Only the decoder was bounded: N workers, N parallel decodes max.
 
-Everything but the decoder runs in parallel with no control, and on GPU that is
+Everything but the decoder ran in parallel with no control, which on GPU was
 dangerous, not fast.
 
-## The approach: one gate, one inference unit per GPU worker
+## The design: one gate, one inference unit per GPU worker
 
 Put one gate at the front, and one unit of work behind it.
 
@@ -99,8 +98,8 @@ anything up. It pays to know which one your platform gives you.
 - N separate encoder sessions on one physical GPU is the same pattern the N
   decoders already use, with `cudnn_conv_algo_search=HEURISTIC` and
   `arena_extend_strategy=kSameAsRequested` set to avoid the conflicting
-  algorithm search. CI has no GPU, so this must be validated on real hardware
-  before trusting it: 32 requests, 8 workers, mixed clip lengths.
+  algorithm search. Validated on real hardware: 32 requests, 8 workers, mixed
+  clip lengths.
 - Audio reading, ffmpeg, and WAV parsing sit outside the gate. They are I/O
   bound and capped by the 25 MB body limit and `-ffmpeg-timeout`; the gate
   starts where the inference cost starts, at mel.
