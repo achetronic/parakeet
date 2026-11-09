@@ -37,9 +37,12 @@ RUN go build -ldflags="-s -w" -o parakeet .
 # ASR models come from our OCI image (distribution: both full and local).
 FROM --platform=$BUILDPLATFORM ghcr.io/achetronic/parakeet-models-asr-${MODEL_PRECISION}:${MODEL_VERSION} AS asr-models
 
-# Models stage: assembles the family-first layout. ASR is copied from the image
-# above (only the local encoder is kept); VAD and diarization are downloaded via
-# the Makefile recipes.
+# Diarization models come from our OCI image too.
+FROM --platform=$BUILDPLATFORM ghcr.io/achetronic/parakeet-models-diarization-${MODEL_PRECISION}:${MODEL_VERSION} AS diarization-models
+
+# Models stage: assembles the family-first layout. ASR and diarization come
+# from the images above (only the local ASR encoder is kept), VAD from the
+# Makefile recipe.
 FROM debian:bookworm-slim AS models
 ARG MODEL_PRECISION=int8
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -47,8 +50,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY Makefile /app/Makefile
-RUN make MODELS_DIR=/models model-download-vad model-download-diarization-${MODEL_PRECISION}
+RUN make MODELS_DIR=/models model-download-vad
 COPY --from=asr-models /models /models/asr/${MODEL_PRECISION}
+COPY --from=diarization-models /models /models/diarization/${MODEL_PRECISION}
 RUN rm -f /models/asr/${MODEL_PRECISION}/encoder-full.*
 
 # Runtime stage

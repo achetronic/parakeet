@@ -1,0 +1,5 @@
+transformers==5.22.2
+onnxruntime==1.31.1
+onnx==1.23.2
+# Required by onnxruntime's MatMulNBits quantizer (8-bit weight-only).
+onnx-ir==1.1.0

@@ -283,3 +283,18 @@ The result is clamped into the legal overlap range, preserving the tiling invari
 - `make model-download-asr-int8` / `-fp32` now only need `curl`, `tar` and `bash`; Docker stays optional (still used to build/push images).
 - Models land directly in `models/asr/{int8,fp32}` via `tar --strip-components=1 models`.
 - crane is pinned to `CRANE_VERSION` and cached in `./bin`; `make clean` removes it.
+
+## DD-021: Diarization ONNX Export Owned In-Repo
+
+**Context**: The diarization assets came from `onnx-community/Nemotron-3-Diarization-ONNX`, a community conversion of the NVIDIA checkpoint with no scripts, no documented process and no pin (`resolve/main`).
+
+**Decision**: Export the graph here from the pinned NVIDIA checkpoint (`export/diarization/export.py`) and distribute it through our own OCI images, like ASR. Keep the previous conversion as a reference for a parity test.
+
+**Rationale**: Reproducible and auditable, and cheap: CPU only, about a minute. The two int8 graphs quantize independently, so the parity test asserts decisions (activity and turns) instead of bit equality.
+
+**Consequences**:
+
+- The graph is the streaming step only. The AOSC/FIFO speaker cache stays in Go.
+- `preprocessor_config.json` is not published upstream, so the export regenerates it.
+- Upstream has no tags, only a moving `main`: the export pins the revision and the content hash of every checkpoint file.
+- The feature-stacking projection stays fp32 in the int8 graph, as upstream did: its output feeds the next chunk's cache.
