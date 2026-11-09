@@ -430,15 +430,17 @@ is not loaded at runtime.
 `vad/silero_vad.onnx` ([snakers4/silero-vad](https://github.com/snakers4/silero-vad), MIT, pinned to v6.2.1) is precision-independent. Used only for chunk boundaries in long-audio mode; missing is a graceful degrade to mel energy.
 
 Speaker diarization (optional, only when `-enable-diarization` is set) needs the
-Nemotron-3-Diarization model under `diarization/<precision>/`:
+Nemotron-3-Diarization model under `diarization/<precision>/`. The ONNX graph is
+exported from the NVIDIA checkpoint by this repo (`export/diarization`), not
+taken from a third-party conversion:
 
-| File (in `diarization/<precision>/`)   | Size   | Description                      |
-| -------------------------------------- | ------ | -------------------------------- |
-| `model_quantized.onnx` + `.onnx_data`  | 120 MB | int8 diarization encoder         |
-| or `model.onnx` + `model.onnx_data`    | 400 MB | fp32 diarization encoder         |
-| `config.json`                          | 1.6 KB | Streaming / speaker-cache config |
-| `preprocessor_config.json`             | 339 B  | Feature extractor config         |
-| `processor_config.json`                | 623 B  | Processor config                 |
+| File (in `diarization/<precision>/`) | Size   | Description                        |
+| ------------------------------------ | ------ | ---------------------------------- |
+| `model_quantized.onnx` + `_data`     | 110 MB | int8 streaming step, 8-bit weights |
+| or `model.onnx`                      | 380 MB | fp32 streaming step                |
+| `config.json`                        | 1.6 KB | Streaming / speaker-cache config   |
+| `preprocessor_config.json`           | 339 B  | Feature extractor config           |
+| `processor_config.json`              | 623 B  | Processor config                   |
 
 Everything is downloaded by `make model-download`.
 
@@ -716,6 +718,7 @@ Audio is detected by content (magic bytes), not by filename extension, so client
 
 - Code: MIT License
 - Parakeet Model: [CC-BY-4.0](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)
+- Nemotron-3-Diarization Model: [openmdw-1.1](https://huggingface.co/nvidia/Nemotron-3-Diarization)
 
 ## Credits
 

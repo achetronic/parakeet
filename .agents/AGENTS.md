@@ -31,13 +31,15 @@ make model-download                 # Download every model (ASR + VAD + diarizat
 make model-download-asr-int8            # Download int8 quantized ASR models
 make model-download-asr-fp32            # Download full precision ASR models (~2.5GB)
 make model-download-vad      # Download + verify the Silero VAD model (MIT, pinned)
-make model-download-diarization-int8  # Download int8 diarization model (~120MB)
-make model-download-diarization-fp32  # Download fp32 diarization model (~400MB)
+make model-download-diarization-int8  # Download int8 diarization models from GHCR (~120MB)
+make model-download-diarization-fp32  # Download fp32 diarization models from GHCR (~380MB)
 
 # Model distribution (download tool + export + package as OCI)
 make crane                       # Download crane (OCI image exporter) if needed
 make model-export-asr-venv       # Create the export venv with ASR deps
 make model-export-asr            # Regenerate ASR ONNX assets from the checkpoint
+make model-export-diarization-venv  # Create the export venv with diarization deps
+make model-export-diarization    # Regenerate diarization ONNX assets from the checkpoint
 make model-build-oci-images      # Build int8 + fp32 model images locally
 make model-push-oci-images       # Build and push int8 + fp32 model images to GHCR
 
@@ -101,7 +103,7 @@ parakeet/
 │       ├── merge.go        # Diarization + ASR word merge into speaker turns
 │       ├── types.go        # Request/response type definitions
 │       └── response_test.go # Segment mapping, SRT/VTT cue rendering, timestamps
-├── export/                 # ASR export pipeline (ONNX assets + OCI model images)
+├── export/                 # Export pipelines, one per family (ONNX assets + OCI model images)
 ├── docs/                   # Images (logo, social previews)
 ├── models/                 # ONNX models (downloaded via make model-download)
 ├── testdata/
@@ -342,7 +344,7 @@ No other external Go dependencies. Standard library used for HTTP, JSON, audio p
 
 - Multi-stage build with golang:1.25-bookworm builder
 - Runtime: debian:bookworm-slim with ONNX Runtime 1.25.1 and ffmpeg
-- Models embedded in image during build: ASR from the OCI model image (`COPY --from=asr-models`), VAD and diarization via the Makefile recipes (`make MODELS_DIR=/models model-download-vad model-download-diarization-<precision>`)
+- Models embedded in image during build: ASR from the OCI model image (`COPY --from=asr-models`), diarization from its own OCI image (`COPY --from=diarization-models`), VAD via the Makefile recipe (`make MODELS_DIR=/models model-download-vad`)
 - Exposed port: 5092
 - `Dockerfile.cuda`: NVIDIA CUDA base + GPU build of ONNX Runtime, fp32 models, linux/amd64 only. Run with `--gpus all` (nvidia-container-toolkit required).
 - Diarization is gated at runtime by `PARAKEET_ENABLE_DIARIZATION=true` (or `-enable-diarization`).
@@ -418,8 +420,9 @@ from `-models` (default `./models`) and `-model-precision` (default `int8`).
 - `asr/int8/decoder_joint-model.int8.onnx` (~54MB) or `asr/fp32/decoder_joint-model.onnx` (~72MB)
 - `config.json`, `vocab.txt` inside the ASR precision dir
 - `vad/silero_vad.onnx` (~2.3MB, snakers4/silero-vad v6.2.1, MIT). Used only for VAD-aware chunk boundaries in long-audio mode. Missing file is a graceful degrade (warns once, falls back to mel energy), not a fatal error.
-- `diarization/int8/` or `diarization/fp32/` - Nemotron-3-Diarization: `model_quantized.onnx` + `model_quantized.onnx_data` (int8, ~120MB) or `model.onnx` + `model.onnx_data` (fp32, ~400MB), plus `config.json`, `preprocessor_config.json`, `processor_config.json`. Download via `make model-download-diarization-int8` / `-fp32` (chained into `make model-download`).
-- Download via `make model-download` (ASR via crane from GHCR, VAD from GitHub, diarization from HuggingFace)
+- `diarization/int8/` or `diarization/fp32/` - Nemotron-3-Diarization: `model_quantized.onnx` + `model_quantized.onnx_data` (int8, ~110MB) or `model.onnx` (fp32, ~380MB), plus `config.json`, `preprocessor_config.json`, `processor_config.json`. Exported from the NVIDIA checkpoint by `export/diarization` (`make model-export-diarization`), never taken from a third-party conversion. Download via `make model-download-diarization-int8` / `-fp32` (chained into `make model-download`).
+- Download via `make model-download` (ASR and diarization via crane from GHCR, VAD from GitHub)
+- Diarization tests (opt-in): `DIAR_DIR=<dir> go test ./internal/diarization/ -run TestDiarizeSampleAudio` for one model, `DIAR_REF_DIR=<old> DIAR_NEW_DIR=<new> ... -run TestParity` to compare an export against the old conversion.
 
 ### Chunk Boundary Selection (long-audio mode)
 

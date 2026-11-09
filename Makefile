@@ -27,7 +27,7 @@ MODELS_DIR := ./models
 .PHONY: docker-build-int8 docker-build-fp32 docker-build-cuda docker-run-int8 docker-run-fp32 docker-run-cuda docker-push
 .PHONY: crane
 .PHONY: model-download model-download-asr model-download-asr-int8 model-download-asr-fp32 model-download-vad model-download-diarization model-download-diarization-int8 model-download-diarization-fp32
-.PHONY: model-export-asr-venv model-export-asr model-build-oci-images model-push-oci-images
+.PHONY: model-export-asr-venv model-export-asr model-export-diarization-venv model-export-diarization model-build-oci-images model-push-oci-images
 .PHONY: release release-linux release-darwin release-windows
 .PHONY: deps-onnxruntime
 
@@ -129,9 +129,9 @@ deps-onnxruntime: ## Install ONNX Runtime library
 # + push OCI images), and download (fetch prebuilt assets).
 
 ### Training (export ONNX assets from checkpoints)
-# Each model family gets its own venv and export targets. asr is the only one
-# today; add vad/ or diarization/ under export/ and mirror these targets.
+# One venv per family: their transformers requirements conflict.
 EXPORT_PYTHON ?= export/venv/bin/python
+EXPORT_DIARIZATION_PYTHON ?= export/venv-diarization/bin/python
 # Torch index for the export venv. cu126 matches a local GPU machine; CI
 # overrides it to the CPU wheel (export runs on CPU).
 PYTORCH_INDEX_URL ?= https://download.pytorch.org/whl/cu126
@@ -146,19 +146,33 @@ model-export-asr: ## Regenerate ASR ONNX assets from the NVIDIA checkpoint
 	@$(EXPORT_PYTHON) export/asr/export.py --out export/asr/assets
 	@echo "Assets written to export/asr/assets/"
 
+model-export-diarization-venv: ## Create the diarization export venv with its dependencies
+	@uv venv --python 3.12 export/venv-diarization
+	@uv pip install --python export/venv-diarization/bin/python torch --index-url $(PYTORCH_INDEX_URL)
+	@uv pip install --python export/venv-diarization/bin/python -r export/diarization/requirements.txt
+
+model-export-diarization: ## Regenerate diarization ONNX assets from the NVIDIA checkpoint
+	@test -x $(EXPORT_DIARIZATION_PYTHON) || (echo "export venv missing, run: make model-export-diarization-venv" && exit 1)
+	@$(EXPORT_DIARIZATION_PYTHON) export/diarization/export.py --out export/diarization/assets
+	@echo "Assets written to export/diarization/assets/"
+
 ### Package (build + publish OCI model images)
-# The model images carry the ASR encoder+decoder split (int8/fp32). They are
-# ASR-specific for now; a future family gets its own image targets if needed.
+# One image per family and precision, with that family's assets inside.
 MODEL_IMAGE_REPO ?= ghcr.io/achetronic/parakeet-models-asr
+MODEL_IMAGE_REPO_DIARIZATION ?= ghcr.io/achetronic/parakeet-models-diarization
 MODEL_TAG ?= latest
 
-model-build-oci-images: model-export-asr ## Build int8 + fp32 model images locally (no push)
+model-build-oci-images: model-export-asr model-export-diarization ## Build every model image locally (no push)
 	@./export/asr/build-image.sh int8 "$(MODEL_IMAGE_REPO)-int8" "$(MODEL_TAG)"
 	@./export/asr/build-image.sh fp32 "$(MODEL_IMAGE_REPO)-fp32" "$(MODEL_TAG)"
+	@./export/diarization/build-image.sh int8 "$(MODEL_IMAGE_REPO_DIARIZATION)-int8" "$(MODEL_TAG)"
+	@./export/diarization/build-image.sh fp32 "$(MODEL_IMAGE_REPO_DIARIZATION)-fp32" "$(MODEL_TAG)"
 
-model-push-oci-images: model-export-asr ## Build and push int8 + fp32 model images to GHCR
+model-push-oci-images: model-export-asr model-export-diarization ## Build and push every model image to GHCR
 	@./export/asr/build-image.sh int8 "$(MODEL_IMAGE_REPO)-int8" "$(MODEL_TAG)" --push
 	@./export/asr/build-image.sh fp32 "$(MODEL_IMAGE_REPO)-fp32" "$(MODEL_TAG)" --push
+	@./export/diarization/build-image.sh int8 "$(MODEL_IMAGE_REPO_DIARIZATION)-int8" "$(MODEL_TAG)" --push
+	@./export/diarization/build-image.sh fp32 "$(MODEL_IMAGE_REPO_DIARIZATION)-fp32" "$(MODEL_TAG)" --push
 
 ### Download (fetch prebuilt models)
 # models/ is organized by model family first, precision second:
@@ -202,33 +216,22 @@ model-download-vad: ## Download and verify the Silero VAD model (MIT)
 	@echo "$(SILERO_VAD_SHA256)  $(MODELS_VAD_DIR)/silero_vad.onnx" | sha256sum -c -
 	@echo "Silero VAD model verified"
 
-# .onnx + .onnx_data must stay together (external weights, relative path). Ref:
-# https://huggingface.co/onnx-community/Nemotron-3-Diarization-ONNX
-DIARIZATION_REPO := onnx-community/Nemotron-3-Diarization-ONNX
+# Diarization comes from our own OCI images too (see export/README.md).
+# .onnx + .onnx_data must stay together: external weights, relative path.
 DIARIZATION_INT8_DIR := $(MODELS_DIR)/diarization/int8
 DIARIZATION_FP32_DIR := $(MODELS_DIR)/diarization/fp32
 
 model-download-diarization: model-download-diarization-int8 model-download-diarization-fp32 ## Download diarization models (int8 + fp32)
 
-model-download-diarization-int8: ## Download int8 diarization model (~120MB)
+model-download-diarization-int8: crane ## Download int8 diarization models from GHCR (~120MB)
 	@mkdir -p $(DIARIZATION_INT8_DIR)
-	@echo "Downloading Nemotron-3-Diarization int8 model from https://huggingface.co/$(DIARIZATION_REPO) ..."
-	@curl -L -o $(DIARIZATION_INT8_DIR)/config.json "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/config.json"
-	@curl -L -o $(DIARIZATION_INT8_DIR)/preprocessor_config.json "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/preprocessor_config.json"
-	@curl -L -o $(DIARIZATION_INT8_DIR)/processor_config.json "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/processor_config.json"
-	@curl -L -o $(DIARIZATION_INT8_DIR)/model_quantized.onnx "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/onnx/model_quantized.onnx"
-	@curl -L -o $(DIARIZATION_INT8_DIR)/model_quantized.onnx_data "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/onnx/model_quantized.onnx_data"
-	@echo "Diarization int8 model downloaded to $(DIARIZATION_INT8_DIR)"
+	@bash -o pipefail -c '"$(CRANE)" export --platform linux/amd64 "$(MODEL_IMAGE_REPO_DIARIZATION)-int8:$(MODEL_TAG)" - | tar -x -C "$(DIARIZATION_INT8_DIR)" --strip-components=1 models'
+	@echo "Diarization int8 models extracted to $(DIARIZATION_INT8_DIR)"
 
-model-download-diarization-fp32: ## Download fp32 diarization model (~400MB)
+model-download-diarization-fp32: crane ## Download fp32 diarization models from GHCR (~380MB)
 	@mkdir -p $(DIARIZATION_FP32_DIR)
-	@echo "Downloading Nemotron-3-Diarization fp32 model from https://huggingface.co/$(DIARIZATION_REPO) ..."
-	@curl -L -o $(DIARIZATION_FP32_DIR)/config.json "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/config.json"
-	@curl -L -o $(DIARIZATION_FP32_DIR)/preprocessor_config.json "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/preprocessor_config.json"
-	@curl -L -o $(DIARIZATION_FP32_DIR)/processor_config.json "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/processor_config.json"
-	@curl -L -o $(DIARIZATION_FP32_DIR)/model.onnx "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/onnx/model.onnx"
-	@curl -L -o $(DIARIZATION_FP32_DIR)/model.onnx_data "https://huggingface.co/$(DIARIZATION_REPO)/resolve/main/onnx/model.onnx_data"
-	@echo "Diarization fp32 model downloaded to $(DIARIZATION_FP32_DIR)"
+	@bash -o pipefail -c '"$(CRANE)" export --platform linux/amd64 "$(MODEL_IMAGE_REPO_DIARIZATION)-fp32:$(MODEL_TAG)" - | tar -x -C "$(DIARIZATION_FP32_DIR)" --strip-components=1 models'
+	@echo "Diarization fp32 models extracted to $(DIARIZATION_FP32_DIR)"
 
 ################################################################################
 ## Docker targets
@@ -343,16 +346,18 @@ help: ## Show this help message
 	@echo "\033[1mModels:\033[0m"
 	@echo "  \033[36mmodel-export-asr-venv\033[0m  Create the export venv with ASR deps"
 	@echo "  \033[36mmodel-export-asr\033[0m  Regenerate ASR ONNX assets from the NVIDIA checkpoint"
-	@echo "  \033[36mmodel-build-oci-images\033[0m  Build int8 + fp32 model images locally"
-	@echo "  \033[36mmodel-push-oci-images\033[0m  Build and push int8 + fp32 model images to GHCR"
+	@echo "  \033[36mmodel-export-diarization-venv\033[0m  Create the export venv with diarization deps"
+	@echo "  \033[36mmodel-export-diarization\033[0m  Regenerate diarization ONNX assets from the NVIDIA checkpoint"
+	@echo "  \033[36mmodel-build-oci-images\033[0m  Build every model image locally"
+	@echo "  \033[36mmodel-push-oci-images\033[0m  Build and push every model image to GHCR"
 	@echo "  \033[36mmodel-download\033[0m  Download every model (ASR + VAD + diarization, both precisions)"
 	@echo "  \033[36mmodel-download-asr\033[0m  Download ASR models (int8 + fp32)"
 	@echo "  \033[36mmodel-download-asr-int8\033[0m  Download ASR int8 models from GHCR (~670MB)"
 	@echo "  \033[36mmodel-download-asr-fp32\033[0m  Download ASR fp32 models from GHCR (~2.5GB)"
 	@echo "  \033[36mmodel-download-vad\033[0m  Download and verify the Silero VAD model (MIT)"
 	@echo "  \033[36mmodel-download-diarization\033[0m  Download diarization models (int8 + fp32)"
-	@echo "  \033[36mmodel-download-diarization-int8\033[0m  Download int8 diarization model (~120MB)"
-	@echo "  \033[36mmodel-download-diarization-fp32\033[0m  Download fp32 diarization model (~400MB)"
+	@echo "  \033[36mmodel-download-diarization-int8\033[0m  Download int8 diarization models from GHCR (~120MB)"
+	@echo "  \033[36mmodel-download-diarization-fp32\033[0m  Download fp32 diarization models from GHCR (~380MB)"
 	@echo ""
 	@echo "\033[1mDocker:\033[0m"
 	@echo "  \033[36mdocker-build-int8\033[0m   Build Docker image with int8 models"

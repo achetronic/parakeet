@@ -2,7 +2,9 @@
 checkpoint/
 assets/
 venv/
+venv-*/
 .image/
+.image-diarization/
 
 # Generated ONNX assets travel as OCI images, not git.
 *.onnx
