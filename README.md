@@ -103,7 +103,7 @@ ONNX Runtime is required to run the inference. Choose the installation method fo
 # Option 1: Download from GitHub releases (recommended)
 curl -L -o onnxruntime.tgz "https://github.com/microsoft/onnxruntime/releases/download/v1.25.1/onnxruntime-linux-x64-1.25.1.tgz"
 tar xzf onnxruntime.tgz
-sudo cp onnxruntime-linux-x64-1.25.1/lib/* /usr/local/lib/
+sudo cp -a onnxruntime-linux-x64-1.25.1/lib/* /usr/local/lib/
 sudo ldconfig
 
 # Option 2: Using apt (if available in your version)
@@ -117,7 +117,7 @@ sudo apt install libonnxruntime-dev
 # Download from GitHub releases
 curl -L -o onnxruntime.tgz "https://github.com/microsoft/onnxruntime/releases/download/v1.25.1/onnxruntime-linux-x64-1.25.1.tgz"
 tar xzf onnxruntime.tgz
-sudo cp onnxruntime-linux-x64-1.25.1/lib/* /usr/local/lib/
+sudo cp -a onnxruntime-linux-x64-1.25.1/lib/* /usr/local/lib/
 sudo ldconfig
 ```
 
@@ -130,7 +130,7 @@ yay -S onnxruntime
 # Or manually
 curl -L -o onnxruntime.tgz "https://github.com/microsoft/onnxruntime/releases/download/v1.25.1/onnxruntime-linux-x64-1.25.1.tgz"
 tar xzf onnxruntime.tgz
-sudo cp onnxruntime-linux-x64-1.25.1/lib/* /usr/local/lib/
+sudo cp -a onnxruntime-linux-x64-1.25.1/lib/* /usr/local/lib/
 sudo ldconfig
 ```
 
@@ -148,7 +148,7 @@ curl -L -o onnxruntime.tgz "https://github.com/microsoft/onnxruntime/releases/do
 tar xzf onnxruntime.tgz
 
 # Install to /usr/local
-sudo cp -r onnxruntime-linux-x64-1.25.1/lib/* /usr/local/lib/
+sudo cp -a onnxruntime-linux-x64-1.25.1/lib/* /usr/local/lib/
 sudo cp -r onnxruntime-linux-x64-1.25.1/include/* /usr/local/include/
 sudo ldconfig
 
@@ -161,7 +161,7 @@ export ONNXRUNTIME_LIB=$(pwd)/onnxruntime-linux-x64-1.25.1/lib/libonnxruntime.so
 ```bash
 curl -L -o onnxruntime.tgz "https://github.com/microsoft/onnxruntime/releases/download/v1.25.1/onnxruntime-linux-aarch64-1.25.1.tgz"
 tar xzf onnxruntime.tgz
-sudo cp onnxruntime-linux-aarch64-1.25.1/lib/* /usr/local/lib/
+sudo cp -a onnxruntime-linux-aarch64-1.25.1/lib/* /usr/local/lib/
 sudo ldconfig
 ```
 
