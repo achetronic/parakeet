@@ -97,6 +97,11 @@ type Config struct {
 	// enables the diarize=true transcription parameter. Off by default so
 	// Parakeet-only deployments work without the extra model.
 	EnableDiarization bool
+
+	// ModelUnloadAfterIdle is how long the models may go without being used
+	// before their weights are freed, releasing RAM and VRAM. Zero keeps them
+	// resident. The next request loads them again, paying the startup cost.
+	ModelUnloadAfterIdle time.Duration
 }
 
 // Server represents the HTTP server for the ASR service
@@ -180,6 +185,13 @@ func New(cfg Config) (*Server, error) {
 		apiKey:      os.Getenv(apiKeyEnvVar),
 	}
 
+	// Start the idle unloader once the model is up, so a burst of traffic does
+	// not keep the weights resident for the lifetime of the process.
+	transcriber.StartIdleUnload(cfg.ModelUnloadAfterIdle)
+	if diarizer != nil {
+		diarizer.StartIdleUnload(cfg.ModelUnloadAfterIdle)
+	}
+
 	if s.apiKey != "" {
 		slog.Info("API key authentication enabled")
 	}
@@ -193,6 +205,8 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/v1/audio/transcriptions", s.requireAuth(s.handleTranscription))
 	s.mux.HandleFunc("/v1/audio/translations", s.requireAuth(s.handleTranslation))
 	s.mux.HandleFunc("/v1/models", s.requireAuth(s.handleModels))
+	s.mux.HandleFunc("/v1/models/load", s.requireAuth(s.handleModelLoad))
+	s.mux.HandleFunc("/v1/models/unload", s.requireAuth(s.handleModelUnload))
 	s.mux.HandleFunc("/health", s.handleHealth)
 }
 
@@ -233,6 +247,7 @@ func (s *Server) Run() error {
 	slog.Info("endpoints registered",
 		"transcriptions", "POST /v1/audio/transcriptions",
 		"models", "GET /v1/models",
+		"model load/unload", "POST /v1/models/load, POST /v1/models/unload",
 	)
 	err := s.httpServer.ListenAndServe()
 	if err == http.ErrServerClosed {

@@ -327,6 +327,7 @@ start instead of silently falling back to CPU.
 | `-disable-mel-based-chunking` | Disable the mel-energy chunk-boundary layer (falls back to the midpoint) | `false`                    | `-disable-mel-based-chunking`          |
 | `-vad-model-path`             | Path to the Silero VAD ONNX model                                        | `<models>/vad/silero_vad.onnx` | `-vad-model-path /opt/silero_vad.onnx` |
 | `-enable-diarization`         | Load the diarization model and allow `diarize=true`                      | `false`                    | `-enable-diarization`                  |
+| `-model-unload-after-idle-duration` | Free every model after this long without use (0 = never)           | `0`                        | `-model-unload-after-idle-duration 5m` |
 
 **Examples:**
 

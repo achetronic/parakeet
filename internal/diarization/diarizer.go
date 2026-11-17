@@ -6,10 +6,15 @@ package diarization
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sort"
+	"sync"
+	"time"
 
 	ort "github.com/yalue/onnxruntime_go"
 
+	"parakeet/internal/idleunload"
+	"parakeet/internal/memtrim"
 	"parakeet/internal/ortutil"
 )
 
@@ -28,6 +33,18 @@ type Diarizer struct {
 	sess    *ort.DynamicAdvancedSession
 	sem     chan struct{}
 	envInit bool
+
+	// Kept so the session can be rebuilt after an unload; the model config and
+	// the feature extractor are cheap and stay resident.
+	modelPath string
+
+	// mu guards the session. A diarization holds it for reading for its whole
+	// run, so Unload (write) only destroys the session once nothing is in flight.
+	mu     sync.RWMutex
+	loaded bool
+
+	// idle frees the session after a quiet period.
+	idle *idleunload.Watcher
 }
 
 // New loads the diarization model from modelsDir and creates a Diarizer.
@@ -50,33 +67,142 @@ func New(modelsDir string, workers int) (*Diarizer, error) {
 		}
 		return nil, err
 	}
-	sess, err := loadSession(modelPath)
-	if err != nil {
-		if envInit {
-			_ = ort.DestroyEnvironment()
-		}
-		return nil, err
-	}
 
 	if workers < 1 {
 		workers = 1
 	}
-	return &Diarizer{
-		cfg:     cfg,
-		fe:      newFeatureExtractor(cfg),
-		sess:    sess,
-		sem:     make(chan struct{}, workers),
-		envInit: envInit,
-	}, nil
+	d := &Diarizer{
+		cfg:       cfg,
+		fe:        newFeatureExtractor(cfg),
+		modelPath: modelPath,
+		sem:       make(chan struct{}, workers),
+		envInit:   envInit,
+	}
+	d.idle = idleunload.New("diarization", d.unloadIfIdle)
+
+	if err := d.loadSession(); err != nil {
+		d.Close()
+		return nil, err
+	}
+	return d, nil
 }
 
-// Close releases the session and, if this Diarizer initialized the ORT
-// environment, destroys it.
-func (d *Diarizer) Close() {
+// loadSession builds the ONNX session. The caller holds mu for writing.
+func (d *Diarizer) loadSession() error {
+	sess, err := loadSession(d.modelPath)
+	if err != nil {
+		return err
+	}
+	d.sess = sess
+	d.loaded = true
+	d.idle.Touch()
+	slog.Info("diarization model loaded", "model", d.modelPath)
+	return nil
+}
+
+// unloadSession destroys the ONNX session. The caller holds mu for writing.
+func (d *Diarizer) unloadSession(reason string) {
 	if d.sess != nil {
 		d.sess.Destroy()
 		d.sess = nil
 	}
+	d.loaded = false
+	// Freed by ORT, retained by the libc arenas: hand it back to the OS.
+	memtrim.Release()
+	slog.Info("diarization model unloaded", "reason", reason)
+}
+
+// acquireSessions loads the session when needed and holds it for the run. The
+// returned release func must be called when the run is done.
+func (d *Diarizer) acquireSessions(ctx context.Context) (func(), error) {
+	for {
+		d.mu.RLock()
+		if d.loaded {
+			d.idle.Touch()
+			return func() {
+				d.mu.RUnlock()
+				d.idle.Touch()
+			}, nil
+		}
+		d.mu.RUnlock()
+
+		d.mu.Lock()
+		if !d.loaded {
+			err := ctx.Err()
+			if err == nil {
+				err = d.loadSession()
+			}
+			if err != nil {
+				d.mu.Unlock()
+				return nil, err
+			}
+		}
+		d.mu.Unlock()
+		// A concurrent unload can slip in here; the loop just loads again.
+	}
+}
+
+// Load brings the diarization session into memory. Idempotent.
+func (d *Diarizer) Load(ctx context.Context) error {
+	release, err := d.acquireSessions(ctx)
+	if err != nil {
+		return err
+	}
+	release()
+	return nil
+}
+
+// Unload releases the diarization session, freeing its memory. In-flight runs
+// finish first.
+func (d *Diarizer) Unload() {
+	d.unload("manual")
+}
+
+func (d *Diarizer) unload(reason string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !d.loaded {
+		return false
+	}
+	d.unloadSession(reason)
+	return true
+}
+
+// Loaded reports whether the diarization session is in memory.
+func (d *Diarizer) Loaded() bool {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.loaded
+}
+
+// StartIdleUnload frees the session after timeout without diarization requests.
+// Zero or a negative timeout disables it.
+func (d *Diarizer) StartIdleUnload(timeout time.Duration) {
+	d.idle.Start(timeout)
+}
+
+// unloadIfIdle frees the session only when it has been idle for the whole
+// timeout, re-checking under the write lock so a slow run is not unloaded the
+// instant it finishes.
+func (d *Diarizer) unloadIfIdle(timeout time.Duration) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !d.loaded || d.idle.IdleFor() < timeout {
+		return false
+	}
+	d.unloadSession("idle timeout")
+	return true
+}
+
+// Close stops the idle unloader, releases the session and, if this Diarizer
+// initialized the ORT environment, destroys it.
+func (d *Diarizer) Close() {
+	d.idle.Stop()
+	d.mu.Lock()
+	if d.loaded {
+		d.unloadSession("shutdown")
+	}
+	d.mu.Unlock()
 	if d.envInit {
 		_ = ort.DestroyEnvironment()
 		d.envInit = false
@@ -121,6 +247,14 @@ func (d *Diarizer) frameDuration() float64 {
 // run extracts features and runs the chunked encoder, returning the per-frame
 // speaker logits (mel rate) for the whole audio.
 func (d *Diarizer) run(ctx context.Context, samples []float32) ([][]float32, error) {
+	// The session must stay alive for the whole run: hold the read side so a
+	// concurrent unload waits instead of pulling it out from under this run.
+	releaseSession, err := d.acquireSessions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseSession()
+
 	// Bound concurrent runs. The session is CPU-only and shared, so the
 	// semaphore caps concurrency and memory, not correctness.
 	select {

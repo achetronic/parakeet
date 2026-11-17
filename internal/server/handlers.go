@@ -22,6 +22,13 @@ import (
 	"parakeet/internal/audio"
 )
 
+// modelID is the single ASR model this server serves. The model endpoints and
+// the /v1/models listing report it under this name.
+const modelID = "parakeet-tdt-0.6b"
+
+// diarizationID names the optional diarization model in the model state answer.
+const diarizationID = "nemotron-3-diarization"
+
 // handleHealth returns the server health status
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -37,24 +44,90 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	loaded := s.transcriber.Loaded()
 	resp := ModelsResponse{
 		Object: "list",
 		Data: []ModelInfo{
 			{
-				ID:      "parakeet-tdt-0.6b",
+				ID:      modelID,
 				Object:  "model",
 				Created: 1700000000,
 				OwnedBy: "nvidia",
+				Loaded:  loaded,
 			},
 			{
 				ID:      "whisper-1", // Alias for compatibility
 				Object:  "model",
 				Created: 1700000000,
 				OwnedBy: "nvidia",
+				Loaded:  loaded,
 			},
 		},
 	}
 	json.NewEncoder(w).Encode(resp)
+}
+
+// handleModelUnload frees every model the server holds, for hosts that share the
+// GPU or the RAM with other workloads. Models that are not enabled in this
+// deployment are simply not part of the answer, so calling it never fails because
+// of a feature that is off. In-flight work finishes first; the next request loads
+// what it needs again automatically.
+func (s *Server) handleModelUnload(w http.ResponseWriter, r *http.Request) {
+	setCORSHeaders(w)
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if r.Method != "POST" {
+		sendError(w, "Method not allowed", "invalid_request_error", http.StatusMethodNotAllowed)
+		return
+	}
+
+	s.transcriber.Unload()
+	states := []ModelState{{ID: modelID, Loaded: false}}
+	if s.diarizer != nil {
+		s.diarizer.Unload()
+		states = append(states, ModelState{ID: diarizationID, Loaded: false})
+	}
+
+	writeModelStates(w, states)
+}
+
+// handleModelLoad brings every enabled model back into memory without waiting for
+// a request, so a caller can pay the load cost up front after an idle unload.
+func (s *Server) handleModelLoad(w http.ResponseWriter, r *http.Request) {
+	setCORSHeaders(w)
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if r.Method != "POST" {
+		sendError(w, "Method not allowed", "invalid_request_error", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if err := s.transcriber.Load(r.Context()); err != nil {
+		sendError(w, "Failed to load the model: "+err.Error(), "server_error", http.StatusInternalServerError)
+		return
+	}
+	states := []ModelState{{ID: modelID, Loaded: true}}
+
+	if s.diarizer != nil {
+		if err := s.diarizer.Load(r.Context()); err != nil {
+			sendError(w, "Failed to load the diarization model: "+err.Error(), "server_error", http.StatusInternalServerError)
+			return
+		}
+		states = append(states, ModelState{ID: diarizationID, Loaded: true})
+	}
+
+	writeModelStates(w, states)
+}
+
+// writeModelStates answers the model endpoints with one entry per model the
+// server holds.
+func writeModelStates(w http.ResponseWriter, states []ModelState) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(ModelStateResponse{Object: "model.state", Models: states})
 }
 
 // handleTranslation handles translation requests (delegates to transcription for now)
