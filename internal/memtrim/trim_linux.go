@@ -6,15 +6,15 @@
 package memtrim
 
 /*
-#include <dlfcn.h>
 #include <stddef.h>
 
-// Look the symbol up at run time instead of linking it: musl has no
-// malloc_trim, and a direct reference would break Alpine builds.
+// Weak, so a libc without malloc_trim (musl) still links: the symbol resolves to
+// NULL there and the check below skips the call.
+extern void malloc_trim(size_t) __attribute__((weak));
+
 static void call_malloc_trim(void) {
-	void (*trim)(size_t) = (void (*)(size_t))dlsym(RTLD_DEFAULT, "malloc_trim");
-	if (trim != NULL) {
-		trim(0);
+	if (malloc_trim != NULL) {
+		malloc_trim(0);
 	}
 }
 */
