@@ -298,3 +298,18 @@ The result is clamped into the legal overlap range, preserving the tiling invari
 - `preprocessor_config.json` is not published upstream, so the export regenerates it.
 - Upstream has no tags, only a moving `main`: the export pins the revision and the content hash of every checkpoint file.
 - The feature-stacking projection stays fp32 in the int8 graph, as upstream did: its output feeds the next chunk's cache.
+
+## DD-022: Model Unloading and On-Demand Reload
+
+**Context**: One int8 worker holds ~2 GB of RAM or VRAM while the server sits idle. Issue #53 asked to release it when unused.
+
+**Decision**: The ONNX sessions are split from the rest of each holder. Vocab, mel, model config, resolved paths and the ORT environment stay resident; the sessions can be destroyed and rebuilt. `-model-unload-after-idle-duration` releases them after a quiet period, `/v1/models/{unload,load}` do it on demand, and the next request reloads what it needs. It covers all models: ASR, VAD and diarization. A model whose feature is off is not loaded, so its unload is a no-op. The default `0` never releases anything.
+
+**Consequences**:
+
+- Each holder has a RWMutex. A request holds the read side for its whole duration; `Unload` takes the write side and therefore waits for in-flight work.
+- Idle time is a timestamp touched at request start and end, not the timer tick, so a request that outlives the timeout is not unloaded the moment it ends.
+- On CPU, destroying the session does not lower RSS: glibc keeps the memory in its arenas. `internal/memtrim` calls `malloc_trim(0)` after each unload, and RSS goes from 1.08 GB to 48 MB.
+- On CUDA, destroy releases the weights and leaves the context: 490 MiB in use after a request, 262 MiB after the unload, 113 MiB for an idle desktop. No growth over three cycles.
+- A reload costs ~3.5 s on CPU and is paid by the first request.
+- If another process takes the RAM or VRAM while the model is unloaded, the reload fails and that request returns 500. Before, a bad GPU setup failed at startup.

@@ -96,6 +96,8 @@ parakeet/
 │   │   └── diarizer.go     # Diarize() orchestration
 │   ├── audio/              # WAV/ffmpeg decoding to 16kHz mono samples
 │   ├── mel/                # Shared log-mel filterbank (FFT, windowing)
+│   ├── idleunload/         # Idle-timeout policy shared by the model holders
+│   ├── memtrim/            # malloc_trim after unload, so RSS really drops
 │   ├── ortutil/            # ONNX Runtime bootstrap (lib path + idempotent init)
 │   └── server/
 │       ├── server.go       # HTTP server, route setup, lifecycle management
@@ -130,7 +132,7 @@ parakeet/
 
 ### `main.go` (Entry Point)
 
-- Parses CLI flags: `-port`, `-models`, `-model-precision`, `-log-level`, `-log-format`, `-workers`, `-ffmpeg`, `-ffmpeg-path`, `-ffmpeg-timeout`, `-gpu`, `-gpu-devices`, `-chunk-seconds`, `-chunk-overlap-seconds`, `-long-audio`, `-disable-vad-based-chunking`, `-disable-mel-based-chunking`, `-vad-model-path`, `-enable-diarization`
+- Parses CLI flags: `-port`, `-models`, `-model-precision`, `-log-level`, `-log-format`, `-workers`, `-ffmpeg`, `-ffmpeg-path`, `-ffmpeg-timeout`, `-gpu`, `-gpu-devices`, `-chunk-seconds`, `-chunk-overlap-seconds`, `-long-audio`, `-disable-vad-based-chunking`, `-disable-mel-based-chunking`, `-vad-model-path`, `-enable-diarization`, `-model-unload-after-idle-duration`
 - Configures `slog` global logger (text or JSON handler, four log levels)
 - Runs server in background goroutine, listens for SIGINT/SIGTERM
 - Graceful shutdown: waits up to 30s for in-flight requests via `http.Server.Shutdown`
@@ -141,9 +143,9 @@ parakeet/
 
 #### `server.go`
 
-- `Config` struct: Port, ModelsDir, LogLevel, LogFormat, Workers, FFmpegEnabled, FFmpegPath, FFmpegTimeout, GPUProvider, GPUDevices, ChunkSeconds, ChunkOverlapSeconds, LongAudio, DisableVADBasedChunking, DisableMelBasedChunking, VADModelPath
+- `Config` struct: Port, ModelsDir, LogLevel, LogFormat, Workers, FFmpegEnabled, FFmpegPath, FFmpegTimeout, GPUProvider, GPUDevices, ChunkSeconds, ChunkOverlapSeconds, LongAudio, DisableVADBasedChunking, DisableMelBasedChunking, VADModelPath, EnableDiarization, ModelUnloadAfterIdle
 - `Server` struct: wraps config, transcriber, `http.Server`, HTTP mux, and API key
-- `New()` - Parses the GPU provider via `asr.ParseProvider` (fails fast on unknown values), initializes transcriber with worker pool, execution provider, and optional ffmpeg converter, reads `PARAKEET_API_KEY` env var, and sets up routes
+- `New()` - Parses the GPU provider via `asr.ParseProvider` (fails fast on unknown values), initializes transcriber with worker pool, execution provider, and optional ffmpeg converter, starts the idle unloader (`ModelUnloadAfterIdle`), reads `PARAKEET_API_KEY` env var, and sets up routes
 - `Run()` - Starts HTTP listener (blocks until shutdown or error)
 - `Shutdown(ctx)` - Graceful HTTP shutdown, waits for in-flight requests to finish
 - `Close()` - Releases transcriber and ONNX resources (must be called after Shutdown)
@@ -154,7 +156,8 @@ parakeet/
 - `handleTranscription()` - Main endpoint, parses multipart form, returns transcription. Uses `TranscribeDetailed` so `verbose_json`, `srt` and `vtt` carry real per-segment timings. Maps `audio.ErrUnsupportedAudio` to HTTP 400 `invalid_request_error`; other errors fall back to HTTP 500 `server_error`.
 - `handleDiarizedTranscription()` - Diarization path (`diarize=true`): loads audio once, transcribes word timestamps, diarizes, and merges into speaker turns.
 - `handleTranslation()` - Delegates to transcription (Parakeet is English-focused)
-- `handleModels()` - Returns available models (parakeet-tdt-0.6b, whisper-1 alias)
+- `handleModels()` - Returns available models (parakeet-tdt-0.6b, whisper-1 alias) with their `loaded` state
+- `handleModelUnload()` / `handleModelLoad()` - `POST /v1/models/{unload,load}`: free every model now, or load them back up front. Both answer `model.state` with one entry per model held and its state after the call.
 - `handleHealth()` - Health check endpoint
 - Response format helpers: `toAPISegments()`, `compressionRatio()`, `renderSRT()`, `renderVTT()`, `formatSRTTime()`, `formatVTTTime()`
 - CORS and error response utilities
@@ -167,7 +170,8 @@ parakeet/
 - `SpeakerTurn` - Speaker-attributed turn (`speaker`, `start`, `end`, `text`)
 - `DiarizedTranscriptionResponse` - Returned when `diarize=true`; `segments` = speaker turns
 - `ErrorResponse`, `ErrorDetail` - OpenAI-compatible error format
-- `ModelInfo`, `ModelsResponse` - Model listing types
+- `ModelInfo`, `ModelsResponse` - Model listing types (`loaded` follows the real session state)
+- `ModelStateResponse` / `ModelState` - Answer of the load/unload endpoints: `object: "model.state"` plus one `ModelState` (`id`, `loaded`) per model held
 
 #### `merge.go`
 
@@ -188,7 +192,10 @@ parakeet/
 - `provider(gpu)` - Returns the effective provider (empty -> CPU) for logging
 - `decoderWorker` - One concurrent transcription slot: a decoder session with reusable tensors, plus a private encoder session on GPU (`nil` on CPU); `newDecoderWorker` takes the device `*ort.SessionOptions`
 - `Transcriber` - Main inference struct holding the worker pool (the single concurrency gate), the shared CPU encoder (`t.encoder`, nil on GPU), and an optional `*audio.Converter`
-- `NewTranscriber(modelsDir, workers, opts)` - Loads config and vocab, initializes ONNX Runtime, and builds the worker pool: on CPU one shared encoder plus a decoder per worker; on GPU an encoder+decoder pair per worker pinned round-robin over `Devices`
+- `NewTranscriber(modelsDir, workers, opts)` - Loads config and vocab, initializes ONNX Runtime, stores the resolved paths, then calls `loadSessions()` to build the sessions: on CPU one shared encoder plus a decoder per worker; on GPU an encoder+decoder pair per worker pinned round-robin over `Devices`
+- `loadSessions()` / `unloadSessions()` - Build or destroy the encoder(s), the worker pool, and the Silero VAD session. Vocab, mel, paths and the ORT environment stay resident, so a reload only re-creates sessions. The unload trims the C heap (`internal/memtrim`), otherwise the memory stays in the process (DD-022)
+- `Unload()` / `Load(ctx)` / `Loaded()` - Free the weights now, load them up front, or read the state. `transcribeSamples` takes the read side of `t.mu` for the whole request, so `Unload` (write side) waits for in-flight work
+- `StartIdleUnload(timeout)` - Starts the shared `internal/idleunload` watcher: it asks `unloadIfIdle` after `timeout` without requests, which re-checks the real idle time under the lock before freeing anything
 - `Transcribe()` - Main entry: audio -> mel -> encoder -> TDT decode -> text. Returns just the text.
 - `TranscribeDetailed()` - Same single pass, returns `Result{Text, Duration, Segments}`. Used by the HTTP handler.
 - `TranscribeStream()` - Same pass with an `emit` callback for SSE deltas. Returns just the text.
@@ -198,6 +205,7 @@ parakeet/
 - `tdtDecode()` - TDT greedy decoding loop reusing pooled session and tensors. Emits `decodedToken` values carrying timestep, predicted frame span, and log probability.
 - `tokensToText()` - Token IDs to text with cleanup
 - `logProb(logits, idx)` - `logit - logsumexp(logits)`; works whether the TDT head exports raw logits or log-probabilities. Computed only for emitted tokens.
+- `Close()` - Stops the idle unloader, frees the sessions, and destroys the ORT environment.
 
 #### `segments.go` (Timed Segments)
 
@@ -240,6 +248,7 @@ parakeet/
 #### `internal/diarization`
 
 - `Diarizer` / `New()` / `Diarize()` - Nemotron-3-Diarization speaker diarization over samples.
+- `Load(ctx)` / `Unload()` / `Loaded()` / `StartIdleUnload(timeout)` - Same lifecycle as the transcriber: the session can be destroyed and rebuilt, the config and mel front end stay resident. `run()` holds the read side of `mu` for its whole duration.
 - `Activity()` - Per-frame speaker probabilities (sigmoid of the logits) at the mel frame rate; the merge uses this.
 - `FrameDuration()` - Duration of one activity frame in seconds.
 - `speakerCache` - AOSC/FIFO speaker cache (ported from Transformers).
@@ -252,7 +261,9 @@ parakeet/
 | ------ | -------------------------- | -------------------------------------------- |
 | POST   | `/v1/audio/transcriptions` | Transcribe audio (OpenAI-compatible)         |
 | POST   | `/v1/audio/translations`   | Translate audio (delegates to transcription) |
-| GET    | `/v1/models`               | List available models                        |
+| GET    | `/v1/models`               | List available models (with `loaded` state)  |
+| POST   | `/v1/models/unload`        | Unload every model now, freeing RAM/VRAM     |
+| POST   | `/v1/models/load`          | Load them back up front                      |
 | GET    | `/health`                  | Health check                                 |
 
 ### Transcription Parameters

@@ -18,6 +18,7 @@ Pending tasks and improvements for the project.
 - [x] **VAD-aware chunk boundaries + seam dedup** — Done. Silence-aware overlaps; dedup removes duplicate/colliding tokens. See DD-014.
 - [x] **GPU inference** — Done. `-gpu cuda` / `-gpu-devices`; CUDA Docker image. See DD-013, DD-019.
 - [x] **Concurrent transcriptions** — Done and validated on a real GPU. Worker pool gates the whole pipeline; per-worker encoder on GPU. See DD-019.
+- [x] **Model unloading** - Idle timeout + `POST /v1/models/unload`, reload on demand. See DD-022.
 - [ ] **Batch inference** — One audio file at a time today; batching could raise throughput.
 - [ ] **Better resampling** — `resample()` is linear; sinc/polyphase would sound better.
 

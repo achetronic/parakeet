@@ -74,6 +74,26 @@ shared and N decoders sit in the pool.
 Nothing is serialized. On one big GPU this is faster than a shared, serialized
 encoder would be; on several GPUs or MIG slices it scales across them.
 
+## Unloading the models
+
+The sessions can be dropped and rebuilt at runtime (DD-022). The concurrency
+model above does not change, it is only paused:
+
+- A request takes the read side of the holder's mutex (`Transcriber.mu`,
+  `Diarizer.mu`) when it enters the pipeline and holds it until it is done,
+  alongside its worker.
+- `Unload` takes the write side, so it waits for every in-flight request and
+  then closes the pool. No draining logic is needed: once the write lock is
+  held, the pool is full.
+- Reloading happens on demand, under the same write lock. The first request
+  after an idle unload pays for loading the sessions; the ones behind it wait
+  and find them ready.
+- The idle unloader frees a model only when the real idle timestamp says the
+  whole timeout elapsed, so a request that outlives the timeout is never
+  unloaded the moment it ends.
+- After destroying the sessions the C heap is trimmed (`internal/memtrim`).
+  Without it the memory stays in the process and a co-tenant gains nothing.
+
 ## Config
 
 - `-gpu-devices "0,1,2"` (env `PARAKEET_GPU_DEVICES`), default `"0"`. The
@@ -90,6 +110,8 @@ anything up. It pays to know which one your platform gives you.
 - CPU: 1 encoder + N decoders + 1 VAD + 1 diarizer, all resident.
 - GPU: N encoders + N decoders in VRAM, roughly N x 670 MB for int8 models.
   Size `-workers` to what the GPUs or slices can hold.
+- Either can be dropped entirely by `-model-unload-after-idle-duration` or
+  `POST /v1/models/unload`; the next request loads it again (DD-022).
 - Per-request peak (mel matrix, tensors) goes from unbounded to at most N.
 
 ## Trade-offs and limits

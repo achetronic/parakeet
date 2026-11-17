@@ -15,11 +15,15 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	ort "github.com/yalue/onnxruntime_go"
 
 	"parakeet/internal/audio"
+	"parakeet/internal/idleunload"
 	"parakeet/internal/mel"
+	"parakeet/internal/memtrim"
 	"parakeet/internal/ortutil"
 )
 
@@ -221,6 +225,26 @@ type Transcriber struct {
 	decoderPool        chan *decoderWorker
 	ffmpeg             *audio.Converter
 	envInit            bool
+
+	// Everything needed to rebuild the ONNX sessions after an unload: the
+	// resolved model paths and the worker/provider layout. Vocab, mel filterbank
+	// and the ONNX Runtime environment stay resident; only the sessions holding
+	// the weights are dropped.
+	encoderPath string
+	decoderPath string
+	vadPath     string
+	workers     int
+	gpu         GPUConfig
+
+	// mu guards the sessions above. A request holds it for reading for its whole
+	// duration, so Unload (which takes it for writing) only destroys them once
+	// nothing is in flight.
+	mu     sync.RWMutex
+	loaded bool
+
+	// idle frees the sessions after a quiet period. A request touches it when it
+	// starts and when it finishes.
+	idle *idleunload.Watcher
 }
 
 // Options groups optional knobs passed to NewTranscriber. Zero values keep
@@ -305,12 +329,15 @@ func buildSessionOptionsForDevice(provider Provider, deviceID int) (*ort.Session
 // NewTranscriber loads models and initializes the decoder worker pool.
 // When opts.FFmpeg is non-nil, non-WAV inputs are transcoded on the fly.
 // Otherwise only WAV is accepted and non-WAV inputs return audio.ErrUnsupportedAudio.
+// The ONNX sessions are loaded eagerly and can be dropped and rebuilt later by
+// Unload / Load without repeating the cheap one-time setup below.
 func NewTranscriber(modelsDir string, workers int, opts Options) (*Transcriber, error) {
 	t := &Transcriber{
 		maxTokensPerStep: 10,
 		blankIdx:         8192,
 		ffmpeg:           opts.FFmpeg,
 	}
+	t.idle = idleunload.New("asr", t.unloadIfIdle)
 
 	// Load config
 	configPath := filepath.Join(modelsDir, "config.json")
@@ -397,43 +424,89 @@ func NewTranscriber(modelsDir string, workers int, opts Options) (*Transcriber, 
 	if workers < 1 {
 		workers = 1
 	}
-	isGPU := opts.GPU.Provider == ProviderCUDA
-	devices := opts.GPU.Devices
+
+	// Keep what loadSessions needs to rebuild the sessions after an unload.
+	t.encoderPath = encoderPath
+	t.decoderPath = decoderPath
+	t.vadPath = opts.Boundary.VADModelPath
+	if t.vadPath == "" {
+		t.vadPath = filepath.Join(modelsDir, "silero_vad.onnx")
+	}
+	t.workers = workers
+	t.gpu = opts.GPU
+
+	if err := t.loadSessions(); err != nil {
+		t.Close()
+		return nil, err
+	}
+
+	return t, nil
+}
+
+// loadSessions builds every ONNX session the transcriber needs: the encoder(s),
+// the decoder worker pool, and the Silero VAD model. It runs once at startup and
+// again after every unload, and it must leave the transcriber exactly as it
+// found it when it fails: unloaded, with nothing half-built and nothing leaked.
+// The caller publishes the result under t.mu.
+func (t *Transcriber) loadSessions() error {
+	start := time.Now()
+
+	isGPU := t.gpu.Provider == ProviderCUDA
+	devices := t.gpu.Devices
 	if isGPU && len(devices) == 0 {
 		devices = []int{0}
+	}
+
+	// Everything is built into locals and published at the end, so a failure
+	// halfway can destroy exactly what this attempt created.
+	var sharedEncoder *ort.DynamicAdvancedSession
+	var vad *sileroVAD
+	pool := make(chan *decoderWorker, t.workers)
+	destroyAttempt := func() {
+		if sharedEncoder != nil {
+			sharedEncoder.Destroy()
+		}
+		close(pool)
+		for w := range pool {
+			w.destroy()
+		}
+		if vad != nil {
+			vad.destroy()
+		}
 	}
 
 	// On CPU build the one shared encoder. On GPU the per-worker encoders are
 	// created with the workers below.
 	if !isGPU {
-		t.encoder, err = newEncoderSession(encoderPath, nil)
+		enc, err := newEncoderSession(t.encoderPath, nil)
 		if err != nil {
-			t.Close()
-			return nil, fmt.Errorf("failed to create encoder session: %w", err)
+			destroyAttempt()
+			return fmt.Errorf("failed to create encoder session: %w", err)
 		}
+		sharedEncoder = enc
 	}
 
-	t.decoderPool = make(chan *decoderWorker, workers)
-	for i := 0; i < workers; i++ {
+	for i := 0; i < t.workers; i++ {
 		var sessOpts *ort.SessionOptions
 		var enc *ort.DynamicAdvancedSession
 
 		if isGPU {
 			deviceID := devices[i%len(devices)]
-			sessOpts, err = buildSessionOptionsForDevice(ProviderCUDA, deviceID)
+			opts, err := buildSessionOptionsForDevice(ProviderCUDA, deviceID)
 			if err != nil {
-				t.Close()
-				return nil, fmt.Errorf("configure CUDA device %d: %w", deviceID, err)
+				destroyAttempt()
+				return fmt.Errorf("configure CUDA device %d: %w", deviceID, err)
 			}
-			enc, err = newEncoderSession(encoderPath, sessOpts)
+			sessOpts = opts
+			enc, err = newEncoderSession(t.encoderPath, sessOpts)
 			if err != nil {
 				sessOpts.Destroy()
-				t.Close()
-				return nil, fmt.Errorf("create encoder session for worker %d (device %d): %w", i, deviceID, err)
+				destroyAttempt()
+				return fmt.Errorf("create encoder session for worker %d (device %d): %w", i, deviceID, err)
 			}
 		}
 
-		w, err := newDecoderWorker(decoderPath, t.vocabSize, sessOpts)
+		w, err := newDecoderWorker(t.decoderPath, t.vocabSize, sessOpts)
 		if sessOpts != nil {
 			sessOpts.Destroy()
 		}
@@ -441,11 +514,11 @@ func NewTranscriber(modelsDir string, workers int, opts Options) (*Transcriber, 
 			if enc != nil {
 				enc.Destroy()
 			}
-			t.Close()
-			return nil, fmt.Errorf("failed to create decoder worker %d: %w", i, err)
+			destroyAttempt()
+			return fmt.Errorf("failed to create decoder worker %d: %w", i, err)
 		}
 		w.encoder = enc
-		t.decoderPool <- w
+		pool <- w
 	}
 
 	// Load the Silero VAD model for chunk-boundary selection. It is only useful
@@ -454,36 +527,168 @@ func NewTranscriber(modelsDir string, workers int, opts Options) (*Transcriber, 
 	// fall back to mel energy. Any other load error is fatal so a
 	// corrupt model surfaces loudly at startup.
 	if t.longAudio && !t.disableVADChunking {
-		vadPath := opts.Boundary.VADModelPath
-		if vadPath == "" {
-			vadPath = filepath.Join(modelsDir, "silero_vad.onnx")
-		}
 		// VAD always runs on CPU: on GPU it would share a session outside the
 		// pool and race the encoders, and its 32 ms windows gain nothing from
 		// GPU kernels.
-		vad, err := newSileroVAD(vadPath, nil)
+		v, err := newSileroVAD(t.vadPath, nil)
 		switch {
 		case err == nil:
-			t.vad = vad
+			vad = v
 		case os.IsNotExist(err):
 			slog.Warn("VAD model not found, chunk boundaries fall back to mel energy",
-				"path", vadPath)
+				"path", t.vadPath)
 		default:
-			t.Close()
-			return nil, fmt.Errorf("failed to load Silero VAD model: %w", err)
+			destroyAttempt()
+			return fmt.Errorf("failed to load Silero VAD model: %w", err)
 		}
 	}
 
-	slog.Info("transcriber initialized",
-		"workers", workers,
-		"provider", string(provider(opts.GPU)),
-		"encoder", filepath.Base(encoderPath),
-		"decoder", filepath.Base(decoderPath),
-		"vocabSize", t.vocabSize,
-		"vad", t.vad != nil,
-	)
+	t.encoder = sharedEncoder
+	t.decoderPool = pool
+	t.vad = vad
+	t.loaded = true
+	// Loading counts as activity: a manual load must not be undone by a tick
+	// that was already scheduled before the weights existed.
+	t.touch()
 
-	return t, nil
+	slog.Info("model loaded",
+		"workers", t.workers,
+		"provider", string(provider(t.gpu)),
+		"encoder", filepath.Base(t.encoderPath),
+		"decoder", filepath.Base(t.decoderPath),
+		"vocabSize", t.vocabSize,
+		"vad", vad != nil,
+		"duration", time.Since(start).Round(time.Millisecond),
+	)
+	return nil
+}
+
+// unloadSessions destroys the sessions and leaves the transcriber unloaded. The
+// caller must hold t.mu for writing, which guarantees no request is using them.
+func (t *Transcriber) unloadSessions(reason string) {
+	start := time.Now()
+	if t.encoder != nil {
+		t.encoder.Destroy()
+		t.encoder = nil
+	}
+	if t.vad != nil {
+		t.vad.destroy()
+		t.vad = nil
+	}
+	if t.decoderPool != nil {
+		close(t.decoderPool)
+		for w := range t.decoderPool {
+			w.destroy()
+		}
+		t.decoderPool = nil
+	}
+	t.loaded = false
+	// The sessions are gone, but the libc keeps their freed memory in its
+	// arenas: hand it back so the RAM really leaves the process.
+	memtrim.Release()
+	slog.Info("model unloaded",
+		"reason", reason,
+		"duration", time.Since(start).Round(time.Millisecond),
+	)
+}
+
+// ensureLoaded loads the sessions when they are not in memory. Concurrent
+// callers serialize on the write lock; whoever arrives second finds the model
+// already there and returns immediately.
+func (t *Transcriber) ensureLoaded(ctx context.Context) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.loaded {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return t.loadSessions()
+}
+
+// acquireSessions hands out shared access to the loaded model, loading it first
+// when an unload (or a cold start) left it out of memory. The returned release
+// func must be called when the request is done: it drops the read lock Unload
+// waits on and resets the idle timer.
+func (t *Transcriber) acquireSessions(ctx context.Context) (func(), error) {
+	for {
+		t.mu.RLock()
+		if t.loaded {
+			// Activity starts now, so a long request cannot be unloaded the
+			// moment it ends; release records the end of it.
+			t.touch()
+			return func() {
+				t.mu.RUnlock()
+				t.touch()
+			}, nil
+		}
+		t.mu.RUnlock()
+
+		// Out of memory: the first request after an unload pays for the load,
+		// the ones behind it wait and find it done.
+		if err := t.ensureLoaded(ctx); err != nil {
+			return nil, err
+		}
+		// Loop to take the read lock again. A concurrent unload can slip in
+		// between, in which case the loop simply loads once more.
+	}
+}
+
+// Load brings the model into memory. Transcriptions already load on demand, so
+// this is only needed to warm the model up after an unload.
+func (t *Transcriber) Load(ctx context.Context) error {
+	return t.ensureLoaded(ctx)
+}
+
+// Unload releases the ONNX sessions immediately, freeing their RAM and, on CUDA,
+// their VRAM. In-flight transcriptions finish first: the write lock waits for
+// every request holding the read side. The next transcription reloads the model
+// on demand.
+func (t *Transcriber) Unload() {
+	t.unload("manual")
+}
+
+func (t *Transcriber) unload(reason string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.loaded {
+		return false
+	}
+	t.unloadSessions(reason)
+	return true
+}
+
+// Loaded reports whether the model sessions are in memory.
+func (t *Transcriber) Loaded() bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.loaded
+}
+
+// StartIdleUnload frees the model after timeout without transcriptions, so a
+// single burst of requests does not keep the weights resident forever. Zero or a
+// negative timeout disables it. The countdown restarts whenever one finishes.
+func (t *Transcriber) StartIdleUnload(timeout time.Duration) {
+	t.idle.Start(timeout)
+}
+
+// touch records activity, which restarts the idle countdown.
+func (t *Transcriber) touch() {
+	t.idle.Touch()
+}
+
+// unloadIfIdle frees the model only when it has been idle for the whole
+// timeout, re-checking under the write lock. That keeps a slow request from
+// being unloaded the instant it finishes just because a tick was already due.
+func (t *Transcriber) unloadIfIdle(timeout time.Duration) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.loaded || t.idle.IdleFor() < timeout {
+		return false
+	}
+	t.unloadSessions("idle timeout")
+	return true
 }
 
 // provider returns the effective provider, defaulting empty to CPU, for logging.
@@ -529,25 +734,18 @@ func (t *Transcriber) loadVocab(path string) error {
 	return scanner.Err()
 }
 
-// Close releases the encoder session, all pool workers, and the ONNX Runtime
-// environment. Safe to call after requests have run.
+// Close stops the idle unloader, releases the encoder session, all pool workers,
+// and the ONNX Runtime environment. Safe to call after requests have run.
 func (t *Transcriber) Close() {
-	if t.encoder != nil {
-		t.encoder.Destroy()
-		t.encoder = nil
+	t.idle.Stop()
+	t.mu.Lock()
+	if t.loaded {
+		t.unloadSessions("shutdown")
 	}
-	if t.vad != nil {
-		t.vad.destroy()
-		t.vad = nil
-	}
-	if t.decoderPool != nil {
-		close(t.decoderPool)
-		for w := range t.decoderPool {
-			w.destroy()
-		}
-	}
+	t.mu.Unlock()
 	if t.envInit {
 		ort.DestroyEnvironment()
+		t.envInit = false
 	}
 }
 
@@ -652,6 +850,16 @@ func (t *Transcriber) transcribeSamples(ctx context.Context, waveform []float32,
 		}
 		return nil, duration, nil
 	}
+
+	// The model weights must stay put for the whole request: hold the read side
+	// so a concurrent Unload waits instead of pulling them out from under this
+	// transcription. release also resets the idle timer, so the model is not
+	// unloaded in the middle of a request that just started.
+	release, err := t.acquireSessions(ctx)
+	if err != nil {
+		return nil, duration, err
+	}
+	defer release()
 
 	// Hold one worker for the whole pipeline so at most -workers transcriptions
 	// are in flight, bounding mel, VAD, encoder, and decoder together.

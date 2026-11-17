@@ -81,12 +81,30 @@ type ErrorDetail struct {
 	Code    string `json:"code,omitempty"`
 }
 
-// ModelInfo represents information about an available model
+// ModelInfo represents information about an available model.
+// Loaded reports whether the weight sessions are in memory: an idle or manual
+// unload reports false, and the next request reloads them on demand.
 type ModelInfo struct {
 	ID      string `json:"id"`
 	Object  string `json:"object"`
 	Created int64  `json:"created"`
 	OwnedBy string `json:"owned_by"`
+	Loaded  bool   `json:"loaded"`
+}
+
+// ModelStateResponse is the answer of the load and unload endpoints: one entry
+// per model the server holds, with its state once the call is done. Models whose
+// feature is disabled are not listed.
+type ModelStateResponse struct {
+	Object string       `json:"object"` // always "model.state"
+	Models []ModelState `json:"models"`
+}
+
+// ModelState is one model. Loaded is the state after the call, so an unload
+// always reports false and a load always reports true.
+type ModelState struct {
+	ID     string `json:"id"`
+	Loaded bool   `json:"loaded"`
 }
 
 // ModelsResponse represents the list of available models
